@@ -89,6 +89,40 @@ pub fn now_iso() -> String {
     format!("@{secs}") // 简化:Unix 秒,前缀标记;前端只作展示
 }
 
+pub async fn call_ai(cfg: &ApiConfig, m: &Match) -> Result<Prediction, PredictError> {
+    let body = build_body(cfg, m);
+    let client = reqwest::Client::new();
+    let url = match cfg.protocol {
+        ApiProtocol::Anthropic => format!("{}/v1/messages", cfg.base_url.trim_end_matches('/')),
+        ApiProtocol::OpenAI => format!("{}/chat/completions", cfg.base_url.trim_end_matches('/')),
+    };
+    let mut req = client.post(&url).json(&body);
+    req = match cfg.protocol {
+        ApiProtocol::Anthropic => req
+            .header("x-api-key", &cfg.api_key)
+            .header("anthropic-version", "2023-06-01"),
+        ApiProtocol::OpenAI => req
+            .header("authorization", format!("Bearer {}", cfg.api_key)),
+    };
+    let resp = req.send().await.map_err(|e| PredictError::Http(e.to_string()))?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(PredictError::Http(format!("{code}: {txt}")));
+    }
+    let v: Value = resp.json().await.map_err(|e| PredictError::Parse(e.to_string()))?;
+    let text = extract_text(cfg.protocol, &v)?;
+    parse_prediction(&m.id, &cfg.model, &text)
+}
+
+/// 失败重试一次
+pub async fn predict(cfg: &ApiConfig, m: &Match) -> Result<Prediction, PredictError> {
+    match call_ai(cfg, m).await {
+        Ok(p) => Ok(p),
+        Err(_) => call_ai(cfg, m).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
