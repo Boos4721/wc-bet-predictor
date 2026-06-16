@@ -1,5 +1,6 @@
 target/
 node_modules/
+dist/
 *.db
 *.sqlite
 config.local.*
