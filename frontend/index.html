@@ -372,21 +372,6 @@ a:focus-visible, button:focus-visible {
   </div>
 </footer>
 
-<script>
-(function () {
-  function grow(bar) {
-    if (!bar) return;
-    Array.prototype.forEach.call(bar.querySelectorAll('[data-grow]'), function (s) {
-      s.style.flexGrow = s.getAttribute('data-grow');
-    });
-  }
-  // hero bars fill on load, staggered A → B
-  var a = document.getElementById('vbarA'), b = document.getElementById('vbarB');
-  requestAnimationFrame(function () {
-    setTimeout(function () { grow(a); }, 120);
-    setTimeout(function () { grow(b); }, 480);
-  });
-})();
-</script>
+<script type="module" src="/src/landing.ts"></script>
 </body>
 </html>
