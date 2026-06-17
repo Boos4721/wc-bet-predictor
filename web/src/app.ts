@@ -613,11 +613,12 @@ function computeCalc(): CalcResult {
   return { n, mult, ks, betCount, stake, maxReturn };
 }
 
-function addCalcLeg(label: string, odds: number): void {
-  if (calcLegs.length >= MAX_LEGS) return;
+function addCalcLeg(label: string, odds: number): boolean {
+  if (calcLegs.length >= MAX_LEGS) return false;
   calcLegs.push({ label: label || "", odds: odds > 1 ? odds : 1.01 });
   syncDefaultWays();
   renderCalc();
+  return true;
 }
 
 // populate the 计算器 match dropdown from the current queue, preserving the
@@ -706,7 +707,10 @@ function addLegFromMatch(): void {
   const o = g && g.opts[+(maybe<HTMLSelectElement>("calcOutcome")?.value || -1)];
   if (!g || !o) { calcErr.textContent = "该赛事暂无可选玩法。"; calcErr.hidden = false; return; }
   if (!(o.prob > 1)) { calcErr.textContent = "该选项暂无有效赔率。"; calcErr.hidden = false; return; }
-  addCalcLeg(`${m.home} vs ${m.away} ${g.label} ${o.label}`, o.prob);
+  if (!addCalcLeg(`${m.home} vs ${m.away} ${g.label} ${o.label}`, o.prob)) {
+    calcErr.textContent = `最多 ${MAX_LEGS} 条投注腿,请先删除部分腿。`;
+    calcErr.hidden = false;
+  }
 }
 
 // default 过关 selection: N==1 → 1串1; N>=2 → N串1. Preserve still-valid user
