@@ -42,12 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ---- 前端:必须先构建,rust-embed 在编译期嵌入 frontend/dist ----
+      # ---- 前端:必须先构建,rust-embed 在编译期嵌入 web/dist ----
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
       - name: Build frontend
-        working-directory: frontend
+        working-directory: web
         run: |
           bun install --frozen-lockfile
           bun run build
@@ -57,15 +57,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend
 
       - name: Test
-        working-directory: backend
         run: cargo test --release --target ${{ matrix.target }}
 
       - name: Build release binary
-        working-directory: backend
         run: cargo build --release --target ${{ matrix.target }}
 
       # ---- 组装产物 ----
@@ -73,10 +69,10 @@ jobs:
         if: matrix.ext == ''
         shell: bash
         run: |
-          VER=$(grep -m1 '^version' backend/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           PKG="wc-bet-predictor-${VER}-${{ matrix.name }}"
           mkdir -p "dist/$PKG"
-          cp "backend/target/${{ matrix.target }}/release/wc-bet-predictor" "dist/$PKG/"
+          cp "target/${{ matrix.target }}/release/wc-bet-predictor" "dist/$PKG/"
           cp README.md "dist/$PKG/" || true
           printf '#!/usr/bin/env bash\ncd "$(dirname "${BASH_SOURCE[0]}")"\nexec ./wc-bet-predictor\n' > "dist/$PKG/run.sh"
           chmod +x "dist/$PKG/run.sh" "dist/$PKG/wc-bet-predictor"
@@ -88,10 +84,10 @@ jobs:
         if: matrix.ext == '.exe'
         shell: bash
         run: |
-          VER=$(grep -m1 '^version' backend/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           PKG="wc-bet-predictor-${VER}-${{ matrix.name }}"
           mkdir -p "dist/$PKG"
-          cp "backend/target/${{ matrix.target }}/release/wc-bet-predictor.exe" "dist/$PKG/"
+          cp "target/${{ matrix.target }}/release/wc-bet-predictor.exe" "dist/$PKG/"
           cp README.md "dist/$PKG/" || true
           printf '@echo off\r\ncd /d "%%~dp0"\r\nwc-bet-predictor.exe\r\n' > "dist/$PKG/run.bat"
           cd dist && 7z a "$PKG.zip" "$PKG" >/dev/null

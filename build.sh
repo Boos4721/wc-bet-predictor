@@ -8,22 +8,22 @@ cd "$ROOT"
 
 BIN_NAME="wc-bet-predictor"
 PKG_DIR="dist-package"
-VERSION="$(grep -m1 '^version' backend/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
+VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 PKG_NAME="${BIN_NAME}-${VERSION}-${OS}-${ARCH}"
 
-echo "==> [1/4] 构建前端 (frontend/dist)"
-( cd frontend && bun install && bun run build )
+echo "==> [1/4] 构建前端 (web/dist)"
+( cd web && bun install && bun run build )
 
 echo "==> [2/4] 编译 release 二进制 (嵌入前端)"
-( cd backend && cargo build --release )
+cargo build --release
 
 echo "==> [3/4] 组装 ${PKG_DIR}/${PKG_NAME}/"
 OUT="${PKG_DIR}/${PKG_NAME}"
 rm -rf "$PKG_DIR"
 mkdir -p "$OUT"
-cp "backend/target/release/${BIN_NAME}" "$OUT/"
+cp "target/release/${BIN_NAME}" "$OUT/"
 cp README.md "$OUT/" 2>/dev/null || true
 
 # 启动脚本:在产物目录内运行二进制(数据文件落在此目录)
