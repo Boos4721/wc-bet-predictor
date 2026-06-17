@@ -38,8 +38,8 @@ fn serve(path: &str) -> Option<Response> {
     })
 }
 
-/// 静态资源 fallback:`/` → index.html(落地页);其余按路径取嵌入文件;
-/// 找不到则回退到 index.html(单页导航友好)。
+/// 静态资源 fallback:`/` → index.html(终端);其余按路径取嵌入文件;
+/// 找不到则回退到 index.html(单页应用)。
 pub async fn static_handler(uri: Uri) -> Response {
     let raw = uri.path().trim_start_matches('/');
     let path = if raw.is_empty() { "index.html" } else { raw };
@@ -47,7 +47,7 @@ pub async fn static_handler(uri: Uri) -> Response {
     if let Some(resp) = serve(path) {
         return resp;
     }
-    // 回退:落地页
+    // 回退:单页入口
     if let Some(resp) = serve("index.html") {
         return resp;
     }

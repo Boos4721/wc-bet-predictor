@@ -1,11 +1,15 @@
 // 竞彩预测 · 模拟账本 — terminal logic, ported to TypeScript.
 // 1:1 behavioral port of the former inline script; backend is source of truth.
 import "./app.css";
+import { LAYOUT } from "./layout";
 import type {
   Match, Prediction, ProbOption, Bet, Stats, AiConfig,
   DayCount, SourceStatus, Pick, SettleResult, SourceId,
   CalcLeg, Ticket, ChatMsg,
 } from "./types";
+
+// 注入页面结构(替代静态 HTML),必须在任何 el() 接线之前执行。
+document.body.innerHTML = LAYOUT;
 
 // ---- typed DOM helpers ----
 function el<T extends HTMLElement = HTMLElement>(id: string): T {

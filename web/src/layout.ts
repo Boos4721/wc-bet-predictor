@@ -1,14 +1,6 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>竞彩预测 · 模拟账本</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-</head>
-<body>
+// 终端页面结构(原 app.html 的 body 内容,迁移为 TS)。
+// app.ts 在启动时把它注入 document.body,再进行 el() 接线。
+export const LAYOUT = `
 <div class="wrap">
 
   <header class="topbar">
@@ -113,6 +105,8 @@
             <p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。概率与建议由后端 AI 模型给出，请先在「AI 配置」中填写服务信息。</p>
           </div>
         </div>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
@@ -199,9 +193,6 @@
         </div>
       </section>
     </aside>
-  </div>
+
 </div>
-<!-- app logic lives in src/app.ts (typed); Vite bundles it into dist/ -->
-<script type="module" src="/src/app.ts"></script>
-</body>
-</html>
+`;
