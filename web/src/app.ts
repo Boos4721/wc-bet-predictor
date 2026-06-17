@@ -486,7 +486,7 @@ function showPrediction(m: Match, p: Prediction): void {
 
 // ---- batch predict — run every queued match through /api/predict with the
 // CURRENT play, sequentially (avoid hammering the AI / rate limits). ----
-interface BatchRow { home: string; away: string; pickLabel: string; conf: number; oddsTxt: string; }
+interface BatchRow { home: string; away: string; pickLabel: string; conf: number; oddsTxt: string; odds: number | null; }
 
 async function predictAll(): Promise<void> {
   const btn = el<HTMLButtonElement>("predictAllBtn");
@@ -511,6 +511,7 @@ async function predictAll(): Promise<void> {
         pickLabel: p.pick_label || "—",
         conf: (p.confidence || 0) * 100,
         oddsTxt: hasOdds ? (p.pick_odds as number).toFixed(2) : "—",
+        odds: hasOdds ? (p.pick_odds as number) : null,
       });
     } catch (e) {
       const msg = /未配置|HTTP 400/.test((e as Error).message)
@@ -523,8 +524,21 @@ async function predictAll(): Promise<void> {
     }
   }
   renderBatchResults(rows, null);
+  feedCalcFromBatch(rows);
   btn.disabled = false;
   btn.textContent = orig;
+}
+
+// 一键预测后:把有赔率的推荐项按置信度取前 8 自动加入计算器并计算(默认 N串1)
+function feedCalcFromBatch(rows: BatchRow[]): void {
+  const picks = rows
+    .filter((r) => typeof r.odds === "number" && (r.odds as number) > 1)
+    .sort((a, b) => b.conf - a.conf)
+    .slice(0, MAX_LEGS);
+  if (!picks.length) return;
+  calcLegs = picks.map((r) => ({ label: `${r.home} vs ${r.away} ${r.pickLabel}`, odds: r.odds as number }));
+  calcWays = { [calcLegs.length]: true }; // 默认 N串1
+  renderCalc(); // 触发 updateCalcReadout 自动计算
 }
 
 function renderBatchResults(rows: BatchRow[], err: string | null): void {
@@ -988,7 +1002,30 @@ function renderTickets(tickets: Ticket[]): void {
   });
 }
 
+// ---- 一键导出截图(懒加载 html2canvas)----
+async function exportScreenshot(): Promise<void> {
+  const btn = el<HTMLButtonElement>("exportBtn");
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "导出中…";
+  try {
+    const { default: html2canvas } = await import("html2canvas");
+    const node = (document.querySelector(".wrap") as HTMLElement) || document.body;
+    const bg = getComputedStyle(document.body).backgroundColor || "#fff";
+    const canvas = await html2canvas(node, { backgroundColor: bg, scale: 2, useCORS: true });
+    const url = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+    a.href = url; a.download = `竞彩预测-${ts}.png`;
+    a.click();
+  } catch (e) {
+    alert("导出失败：" + (e as Error).message);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
 // ---- wiring (elements are static in app.html, so bind once at module load) ----
+el("exportBtn").addEventListener("click", exportScreenshot);
 el<HTMLSelectElement>("protocol").addEventListener("change", () => populateModels());
 el<HTMLSelectElement>("modelSel").addEventListener("change", syncCustomVisibility);
 el("savekey").addEventListener("click", saveConfig);
