@@ -146,6 +146,19 @@ textarea.well { resize: vertical; min-height: 92px; line-height: 1.6; }
 .prob-legend { display: flex; gap: 18px; margin-top: 10px; font-size: 12px; color: var(--steel); }
 .prob-legend .k { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 
+/* ranked probability list — many-outcome markets (比分 etc.) where the
+   segmented bar would crush every label into an unreadable sliver */
+.prob-list { display: flex; flex-direction: column; gap: 8px; }
+.prob-item { display: grid; grid-template-columns: minmax(88px, 32%) 1fr 46px; gap: 12px; align-items: center; }
+.prob-item .pl-label { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prob-item.pick .pl-label { color: var(--teal-text); font-weight: 600; }
+.prob-item .pl-track { height: 22px; border-radius: 5px; background: var(--raised); overflow: hidden; }
+.prob-item .pl-fill { display: block; height: 100%; border-radius: 5px; background: #CDD5DF; transform: scaleX(0); transform-origin: left; }
+.prob-item.pick .pl-fill { background: var(--teal); }
+.prob-list.shown .pl-fill { transform: scaleX(1); transition: transform 0.55s var(--ease); }
+.prob-item .pl-pct { font-size: 12px; color: var(--steel); text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.prob-item.pick .pl-pct { color: var(--teal-text); }
+
 .pred-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; margin-bottom: 18px; }
 .pred-cell { background: var(--slate); padding: 12px 14px; }
 .pred-cell .l { font-size: 11px; color: var(--steel); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -177,6 +190,7 @@ textarea.well { resize: vertical; min-height: 92px; line-height: 1.6; }
   .match-row.row-in, .pred-reveal { animation: none; will-change: auto; }
   .shimmer-line { animation: none; }
   .prob-bar, .prob-bar.shown { clip-path: none; transition: none; will-change: auto; }
+  .pl-fill, .prob-list.shown .pl-fill { transform: scaleX(1); transition: none; }
 }
 
 /* ---- Stats strip ---- */
@@ -208,6 +222,32 @@ table.ledger .status.pending { color: var(--steel); }
 .led-empty { padding: 40px 20px; text-align: center; color: var(--steel); line-height: 1.8; }
 .led-team { font-weight: 500; }
 .led-pick { color: var(--teal-text); font-size: 12px; }
+
+/* ---- Parlay calculator (下单计算器) ---- */
+.calc-leg { display: grid; grid-template-columns: 1fr 96px auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.calc-leg .well { margin: 0; }
+.calc-leg .del { padding: 0; width: 40px; height: 40px; flex: 0 0 auto; line-height: 1; }
+.calc-empty { font-size: 12px; color: var(--steel); padding: 10px 0 4px; }
+.calc-ways { display: flex; flex-wrap: wrap; gap: 8px; }
+.calc-way { display: inline-flex; align-items: center; padding: 7px 13px; border: 1px solid var(--hairline); border-radius: 8px; cursor: pointer; font-size: 12px; color: var(--steel); user-select: none; transition: border-color 0.16s var(--ease), background 0.16s var(--ease); }
+.calc-way:hover { border-color: var(--hairline-strong); }
+.calc-way.on { border-color: var(--teal); background: var(--teal-dim); color: var(--teal-text); font-weight: 600; }
+.calc-way input { position: absolute; opacity: 0; pointer-events: none; }
+.calc-readout { display: flex; gap: 0; flex-wrap: wrap; margin: 18px 0 16px; padding: 14px 0; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.calc-readout .ro { padding: 0 22px; border-left: 1px solid var(--hairline); }
+.calc-readout .ro:first-child { padding-left: 0; border-left: none; }
+.calc-readout .ro .l { font-size: 11px; color: var(--steel); text-transform: uppercase; letter-spacing: 0.06em; }
+.calc-readout .ro .v { font-size: 20px; font-weight: 600; margin-top: 3px; }
+.calc-readout .ro .v.teal { color: var(--teal-text); }
+.calc-slip { border: 1px solid var(--hairline); border-radius: 8px; padding: 16px; margin-top: 4px; }
+.calc-slip h3 { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--steel); margin-bottom: 12px; }
+.calc-slip .leg-line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 5px 0; border-bottom: 1px dashed var(--hairline); }
+.calc-slip .leg-line:last-of-type { border-bottom: none; }
+.calc-slip .leg-line .lo { color: var(--teal-text); }
+.calc-slip .slip-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; font-size: 13px; color: var(--steel); }
+.calc-slip .slip-meta b { color: var(--ink); font-weight: 600; }
+.calc-notice { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--raised); color: var(--steel); font-size: 12px; line-height: 1.6; }
+.calc-notice svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; color: var(--draw); }
 
 @media (max-width: 880px) {
   .shell { grid-template-columns: 1fr; }
@@ -327,7 +367,33 @@ table.ledger .status.pending { color: var(--steel); }
       </section>
 
       <section class="panel">
-        <div class="panel-head"><h2>账本统计</h2><span class="meta">Ledger</span></div>
+        <div class="panel-head"><h2>下单计算器</h2><span class="meta">Parlay</span></div>
+        <div class="field">
+          <label>投注腿 <span class="hint">label @ odds，最多 8 腿</span></label>
+          <div id="calcLegs"></div>
+          <div class="calc-empty" id="calcLegsEmpty">尚未添加投注腿。点击「+ 添加腿」或在预测卡中「加入计算器」。</div>
+          <button class="btn btn-ghost btn-sm" id="calcAddLeg" style="margin-top:8px">+ 添加腿</button>
+        </div>
+        <div class="field">
+          <label>过关方式 <span class="hint">复式可多选</span></label>
+          <div class="calc-ways" id="calcWays"></div>
+        </div>
+        <div class="field" style="max-width:160px">
+          <label for="calcMult">倍数</label>
+          <input class="well mono" id="calcMult" type="number" min="1" step="1" value="1" />
+        </div>
+        <div class="calc-readout">
+          <div class="ro"><div class="l">注数</div><div class="v num" id="calcCount">0</div></div>
+          <div class="ro"><div class="l">投注额</div><div class="v num" id="calcStake">¥0.00</div></div>
+          <div class="ro"><div class="l">最高奖金</div><div class="v num teal" id="calcReturn">¥0.00</div></div>
+        </div>
+        <div class="calc-slip" id="calcSlip" hidden></div>
+        <button class="btn btn-primary" id="calcLogBtn" style="margin-top:14px" disabled>记入账本</button>
+        <div class="err" id="calcErr" hidden></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>账本统计</h2><button class="btn btn-ghost btn-sm" id="clearLedgerBtn">清空账本</button></div>
         <div class="stats" id="stats">
           <div class="stat"><div class="l">已结算</div><div class="v num" id="stSettled">0 笔</div></div>
           <div class="stat"><div class="l">命中率</div><div class="v num draw" id="stHit">—</div></div>
@@ -346,6 +412,18 @@ table.ledger .status.pending { color: var(--steel); }
             <tbody id="ledgerBody"></tbody>
           </table>
           <div class="led-empty" id="ledgerEmpty">粘贴赛事 → 预测 → 记一笔，盈亏统计将在结算后出现。</div>
+        </div>
+        <div class="ledger-wrap" style="margin-top:8px">
+          <table class="ledger" id="ticketTable" hidden>
+            <thead>
+              <tr>
+                <th>单号</th><th>腿数/过关</th>
+                <th class="r">倍数</th><th class="r">投注额</th><th class="r">最高奖金</th>
+                <th>状态</th><th class="r">结算</th>
+              </tr>
+            </thead>
+            <tbody id="ticketBody"></tbody>
+          </table>
         </div>
       </section>
 
@@ -718,18 +796,55 @@ table.ledger .status.pending { color: var(--steel); }
     if (box) { box.textContent = msg; box.hidden = false; }
   }
 
+  // Build the probability visual. ≤3 outcomes → segmented bar (主胜/平/客胜).
+  // More (比分, 半场比分…) → ranked list so labels stay readable; show the
+  // top rows, always include the pick, fold the long tail into one row.
+  function buildProbViz(options, pickLabel) {
+    if (options.length <= 3) {
+      var segs = options.map(function (o) {
+        var cls = o.label === pickLabel ? 'pick' : 'rest';
+        var w = Math.round((o.prob || 0) * 100);
+        return '<div class="prob-seg ' + cls + '" style="flex-grow:' + (o.prob || 0) + '">' +
+          '<span class="lab">' + esc(o.label) + '</span><span class="num">' + w + '%</span></div>';
+      }).join('');
+      return '<div class="prob-bar" id="probBar">' + segs + '</div>';
+    }
+
+    var TOP = 8;
+    var shown = options.slice(0, TOP);
+    // guarantee the recommended outcome is visible even if outside the top N
+    if (pickLabel && !shown.some(function (o) { return o.label === pickLabel; })) {
+      var pick = options.filter(function (o) { return o.label === pickLabel; })[0];
+      if (pick) { shown = shown.slice(0, TOP - 1).concat([pick]); }
+    }
+    var rest = options.filter(function (o) { return shown.indexOf(o) === -1; });
+
+    var rows = shown.map(function (o) {
+      var cls = o.label === pickLabel ? ' pick' : '';
+      var w = Math.round((o.prob || 0) * 100);
+      return '<div class="prob-item' + cls + '">' +
+        '<span class="pl-label">' + esc(o.label) + '</span>' +
+        '<span class="pl-track"><span class="pl-fill" style="width:' + Math.max(w, 2) + '%"></span></span>' +
+        '<span class="pl-pct">' + w + '%</span></div>';
+    });
+
+    if (rest.length) {
+      var restProb = rest.reduce(function (s, o) { return s + (o.prob || 0); }, 0);
+      var rw = Math.round(restProb * 100);
+      rows.push('<div class="prob-item">' +
+        '<span class="pl-label">其余 ' + rest.length + ' 项</span>' +
+        '<span class="pl-track"><span class="pl-fill" style="width:' + Math.max(rw, 2) + '%"></span></span>' +
+        '<span class="pl-pct">' + rw + '%</span></div>');
+    }
+    return '<div class="prob-list" id="probBar">' + rows.join('') + '</div>';
+  }
+
   function showPrediction(m, p) {
     var options = (p.options || []).slice().sort(function (a, b) { return (b.prob || 0) - (a.prob || 0); });
     var conf = (p.confidence || 0) * 100;
     var hasOdds = typeof p.pick_odds === 'number' && p.pick !== null && p.pick !== undefined;
 
-    var segs = '';
-    options.forEach(function (o) {
-      var cls = o.label === p.pick_label ? 'pick' : 'rest';
-      var w = Math.round((o.prob || 0) * 100);
-      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:' + (o.prob || 0) + '">' +
-        '<span class="lab">' + esc(o.label) + '</span><span class="num">' + w + '%</span></div>';
-    });
+    var viz = buildProbViz(options, p.pick_label);
 
     var oddsCell = hasOdds ? p.pick_odds.toFixed(2) : '—';
 
@@ -738,6 +853,7 @@ table.ledger .status.pending { color: var(--steel); }
           '<div class="stake-field field" style="margin:0"><label for="stake">模拟本金</label>' +
             '<input class="well mono" id="stake" type="number" min="1" step="1" value="100" /></div>' +
           '<button class="btn btn-primary" id="logbtn" style="width:auto;flex:0 0 auto">记一笔</button>' +
+          '<button class="btn btn-ghost" id="addCalcBtn" style="width:auto;flex:0 0 auto">加入计算器</button>' +
         '</div>' +
         '<div class="err" id="logerr" hidden></div>'
       : '<div class="pred-rationale" style="border-top:none;padding-top:12px;color:var(--steel)">该玩法为纯预测，不计入账本。</div>';
@@ -746,7 +862,7 @@ table.ledger .status.pending { color: var(--steel); }
       '<div class="pred-card pred-reveal">' +
         '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
         '<div class="pred-league">' + esc(m.league) + ' · 模型 ' + esc(p.model || '') + '</div>' +
-        '<div class="prob-wrap"><div class="prob-bar" id="probBar">' + segs + '</div>' +
+        '<div class="prob-wrap">' + viz +
           '<div class="prob-legend"><span><i class="k" style="background:var(--teal)"></i>建议结果</span>' +
           '<span><i class="k" style="background:#CDD5DF"></i>其余结果</span></div></div>' +
         '<div class="pred-grid">' +
@@ -758,8 +874,8 @@ table.ledger .status.pending { color: var(--steel); }
         actions +
       '</div>';
 
-    // reveal: clip-path wipe on the whole bar (compositor-only, no layout).
-    // drop will-change once the transition ends so the layer isn't pinned.
+    // reveal: clip-path wipe (segmented bar) or scaleX fill (ranked list) —
+    // both compositor-only, no per-frame layout. drop will-change after.
     requestAnimationFrame(function () {
       var bar = $('probBar'); if (!bar) return;
       bar.classList.add('shown');
@@ -774,6 +890,10 @@ table.ledger .status.pending { color: var(--steel); }
         var stake = parseFloat($('stake').value);
         if (!(stake > 0)) { $('stake').focus(); return; }
         logBet(m, p.pick, p.pick_odds, stake);
+      });
+      $('addCalcBtn').addEventListener('click', function () {
+        var label = (p.pick_label ? (m.home + ' ' + p.pick_label) : (m.home + ' vs ' + m.away));
+        addCalcLeg(label, p.pick_odds);
       });
     }
   }
@@ -803,6 +923,7 @@ table.ledger .status.pending { color: var(--steel); }
       $('ledgerEmpty').textContent = '无法加载账本：' + e.message;
       $('ledgerEmpty').hidden = false;
     });
+    api('/api/tickets').then(renderTickets).catch(function () {});
     api('/api/stats').then(renderStats).catch(function () {});
   }
 
@@ -872,15 +993,231 @@ table.ledger .status.pending { color: var(--steel); }
     roiEl.className = 'v num ' + (roi > 0 ? 'profit' : roi < 0 ? 'deficit' : 'draw');
   }
 
+  // ---- 下单计算器 (parlay calculator) ----
+  var MAX_LEGS = 8;
+  var UNIT = 2;            // 单注基础金额 2 元
+  var calcLegs = [];       // [{label, odds}]
+  var calcWays = {};       // { k(int): true } chosen 过关方式
+
+  // combinations of `arr` taken `k` at a time → array of sub-arrays
+  function combos(arr, k) {
+    var out = [];
+    (function pick(start, acc) {
+      if (acc.length === k) { out.push(acc.slice()); return; }
+      for (var i = start; i < arr.length; i++) { acc.push(arr[i]); pick(i + 1, acc); acc.pop(); }
+    })(0, []);
+    return out;
+  }
+
+  // compute bet_count, stake, max_return from legs/ways/multiplier
+  function computeCalc() {
+    var n = calcLegs.length;
+    var mult = Math.max(1, parseInt($('calcMult').value, 10) || 1);
+    var odds = calcLegs.map(function (l) { return l.odds; });
+    var ks = Object.keys(calcWays).map(Number).filter(function (k) { return calcWays[k] && k >= 1 && k <= n; }).sort(function (a, b) { return a - b; });
+    var betCount = 0, oddsSum = 0;
+    ks.forEach(function (k) {
+      var cs = combos(odds, k);
+      betCount += cs.length;
+      cs.forEach(function (combo) {
+        oddsSum += combo.reduce(function (p, o) { return p * o; }, 1);
+      });
+    });
+    var stake = betCount * UNIT * mult;
+    var maxReturn = oddsSum * UNIT * mult;
+    return { n: n, mult: mult, ks: ks, betCount: betCount, stake: stake, maxReturn: maxReturn };
+  }
+
+  function addCalcLeg(label, odds) {
+    if (calcLegs.length >= MAX_LEGS) return;
+    calcLegs.push({ label: label || '', odds: (odds > 1 ? odds : 1.01) });
+    syncDefaultWays();
+    renderCalc();
+  }
+
+  // default 过关 selection: N==1 → 1串1; N>=2 → N串1. Preserve still-valid
+  // user choices; only apply default when nothing valid remains selected.
+  function syncDefaultWays() {
+    var n = calcLegs.length;
+    var kept = {};
+    Object.keys(calcWays).forEach(function (k) { if (calcWays[k] && +k <= n && +k >= 1) kept[k] = true; });
+    if (!Object.keys(kept).length && n >= 1) { kept[n] = true; }
+    calcWays = kept;
+  }
+
+  function waysLabel(k) { return k + '串1'; }
+
+  function renderCalc() {
+    // legs
+    var host = $('calcLegs'); host.innerHTML = '';
+    $('calcLegsEmpty').hidden = calcLegs.length > 0;
+    calcLegs.forEach(function (leg, i) {
+      var row = document.createElement('div');
+      row.className = 'calc-leg';
+      row.innerHTML =
+        '<input class="well" type="text" data-ci="' + i + '" data-cf="label" placeholder="选择/赛事" value="' + esc(leg.label) + '" />' +
+        '<input class="well mono" type="number" min="1.01" step="0.01" data-ci="' + i + '" data-cf="odds" value="' + leg.odds + '" />' +
+        '<button class="btn btn-ghost btn-sm del" data-cdel="' + i + '" title="删除">✕</button>';
+      host.appendChild(row);
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-ci]'), function (inp) {
+      inp.addEventListener('input', function () {
+        var i = +inp.getAttribute('data-ci'), f = inp.getAttribute('data-cf');
+        if (f === 'odds') { calcLegs[i].odds = parseFloat(inp.value) || 0; }
+        else { calcLegs[i].label = inp.value; }
+        updateCalcReadout();
+      });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-cdel]'), function (btn) {
+      btn.addEventListener('click', function () {
+        calcLegs.splice(+btn.getAttribute('data-cdel'), 1);
+        syncDefaultWays();
+        renderCalc();
+      });
+    });
+
+    // ways checkboxes (k = 1..N)
+    var ways = $('calcWays'); ways.innerHTML = '';
+    var n = calcLegs.length;
+    if (!n) { ways.innerHTML = '<span class="calc-empty" style="padding:0">添加投注腿后选择过关方式。</span>'; }
+    for (var k = 1; k <= n; k++) {
+      (function (k) {
+        var lab = document.createElement('label');
+        lab.className = 'calc-way' + (calcWays[k] ? ' on' : '');
+        lab.innerHTML = '<input type="checkbox"' + (calcWays[k] ? ' checked' : '') + ' />' + waysLabel(k);
+        lab.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) { calcWays[k] = true; } else { delete calcWays[k]; }
+          lab.classList.toggle('on', !!calcWays[k]);
+          updateCalcReadout();
+        });
+        ways.appendChild(lab);
+      })(k);
+    }
+
+    updateCalcReadout();
+  }
+
+  function updateCalcReadout() {
+    var c = computeCalc();
+    $('calcCount').textContent = c.betCount;
+    $('calcStake').textContent = '¥' + c.stake.toFixed(2);
+    $('calcReturn').textContent = '¥' + c.maxReturn.toFixed(2);
+    renderSlip(c);
+    var ok = c.n > 0 && c.ks.length > 0 && c.betCount > 0 &&
+      calcLegs.every(function (l) { return l.odds > 1 && l.label.trim(); });
+    $('calcLogBtn').disabled = !ok;
+  }
+
+  function renderSlip(c) {
+    var slip = $('calcSlip');
+    if (!c.n || !c.ks.length) { slip.hidden = true; slip.innerHTML = ''; return; }
+    slip.hidden = false;
+    var legLines = calcLegs.map(function (l) {
+      return '<div class="leg-line"><span>' + esc(l.label || '未命名') + '</span><span class="lo num">@ ' + (l.odds || 0).toFixed(2) + '</span></div>';
+    }).join('');
+    var waysTxt = c.ks.map(waysLabel).join(', ');
+    slip.innerHTML =
+      '<h3>投注方案</h3>' + legLines +
+      '<div class="slip-meta">' +
+        '<span>过关 <b>' + esc(waysTxt) + '</b></span>' +
+        '<span>倍数 <b>' + c.mult + '</b></span>' +
+        '<span>注数 <b>' + c.betCount + '</b></span>' +
+        '<span>投注额 <b class="num">¥' + c.stake.toFixed(2) + '</b></span>' +
+        '<span>最高奖金 <b class="num" style="color:var(--teal-text)">¥' + c.maxReturn.toFixed(2) + '</b></span>' +
+      '</div>' +
+      '<div class="calc-notice">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.5"/></svg>' +
+        '<span>凭此方案到中国体育彩票实体店购买。本工具仅作虚拟记录与复盘，不提供代购、不涉及真实投注。</span>' +
+      '</div>';
+  }
+
+  $('calcAddLeg').addEventListener('click', function () { addCalcLeg('', 2.00); });
+  $('calcMult').addEventListener('input', updateCalcReadout);
+  $('calcLogBtn').addEventListener('click', function () {
+    $('calcErr').hidden = true;
+    var c = computeCalc();
+    if ($('calcLogBtn').disabled) return;
+    postJSON('/api/tickets', {
+      legs: calcLegs.map(function (l) { return { label: l.label, odds: l.odds }; }),
+      ways: c.ks,
+      multiplier: c.mult,
+      bet_count: c.betCount,
+      stake: c.stake,
+      max_return: c.maxReturn
+    }).then(function () { refreshLedger(); })
+      .catch(function (e) { $('calcErr').textContent = '记入失败：' + e.message; $('calcErr').hidden = false; });
+  });
+
+  // ---- 清空账本 ----
+  $('clearLedgerBtn').addEventListener('click', function () {
+    if (!confirm('确认清空账本？将删除全部单注、投注单与结算记录，且不可恢复。')) return;
+    postJSON('/api/ledger/clear', {}).then(function () { refreshLedger(); })
+      .catch(function (e) {
+        $('ledgerEmpty').textContent = '清空失败：' + e.message;
+        $('ledgerEmpty').hidden = false;
+      });
+  });
+
+  // ---- 投注单 (tickets) ----
+  function settleTicket(id, payout) {
+    postJSON('/api/tickets/settle', { id: id, payout: payout })
+      .then(function () { refreshLedger(); })
+      .catch(function (e) { alert('结算失败：' + e.message); });
+  }
+
+  function renderTickets(tickets) {
+    tickets = tickets || [];
+    var body = $('ticketBody'), has = tickets.length > 0;
+    $('ticketTable').hidden = !has;
+    body.innerHTML = '';
+    tickets.forEach(function (t) {
+      var legs = [], ways = [];
+      try { legs = JSON.parse(t.legs || '[]'); } catch (e) { legs = []; }
+      try { ways = JSON.parse(t.ways || '[]'); } catch (e) { ways = []; }
+      var waysTxt = ways.map(function (k) { return k + '串1'; }).join(', ');
+      var statusCls = t.status === 'Won' ? 'profit' : t.status === 'Lost' ? 'deficit' : 'pending';
+      var statusTxt = t.status === 'Won' ? '命中' : t.status === 'Lost' ? '未中' : '待结算';
+      var legSummary = legs.map(function (l) { return esc(l.label || '腿') + ' @' + (+l.odds || 0).toFixed(2); }).join('、');
+      var action;
+      if (t.status === 'Pending') {
+        action = '<div class="settle-btns">' +
+          '<input class="well mono" type="number" min="0" step="0.01" placeholder="实际奖金" data-tpay="' + t.id + '" style="height:32px;width:96px;padding:4px 8px;font-size:12px" />' +
+          '<button class="btn btn-ghost btn-sm" data-tid="' + t.id + '">结算</button></div>';
+      } else {
+        var pay = (typeof t.payout === 'number') ? t.payout.toFixed(2) : '0.00';
+        action = '<span class="num" style="color:var(--steel);font-size:12px">奖金 ¥' + pay + '</span>';
+      }
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td class="mono">' + esc(String(t.id)) + '</td>' +
+        '<td><span class="led-team">' + legs.length + ' 腿 · ' + esc(waysTxt || '—') + '</span>' +
+          '<br><span style="color:var(--steel);font-size:11px">' + (legSummary || '—') + '</span></td>' +
+        '<td class="r num">' + (t.multiplier || 1) + '</td>' +
+        '<td class="r num">' + (+t.stake || 0).toFixed(2) + '</td>' +
+        '<td class="r num" style="color:var(--teal-text)">' + (+t.max_return || 0).toFixed(2) + '</td>' +
+        '<td><span class="status ' + statusCls + '">' + statusTxt + '</span></td>' +
+        '<td class="r">' + action + '</td>';
+      body.appendChild(tr);
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-tid]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var id = parseInt(btn.getAttribute('data-tid'), 10);
+        var inp = body.querySelector('[data-tpay="' + id + '"]');
+        var payout = parseFloat(inp && inp.value);
+        if (!(payout >= 0)) { if (inp) inp.focus(); return; }
+        settleTicket(id, payout);
+      });
+    });
+  }
+
   // ---- helpers ----
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]); }); }
-
-  // ---- boot ----
   populateModels();
   loadConfig();
   loadPolyDates();
   loadStatus();
   renderMatches(); renderPredEmpty();
+  renderCalc();
   refreshLedger();
 })();
 </script>
