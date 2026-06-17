@@ -269,7 +269,14 @@ table.ledger .status.pending { color: var(--steel); }
         <div class="err" id="parseerr" hidden></div>
         <div class="row2">
           <button class="btn btn-primary" id="parsebtn">解析赛事</button>
-          <button class="btn btn-ghost" id="polybtn">拉取 Polymarket 世界杯</button>
+        </div>
+        <div class="field" style="margin-top:14px;margin-bottom:0">
+          <label for="polyDate">Polymarket 世界杯 · 按解算日</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select class="well" id="polyDate" style="flex:1"><option value="">全部（前40场）</option></select>
+            <button class="btn btn-ghost btn-sm" id="polyBtn" style="flex:0 0 auto;white-space:nowrap">拉取该日</button>
+          </div>
+          <div class="err" id="polyerr" hidden></div>
         </div>
       </section>
     </aside>
@@ -426,18 +433,39 @@ table.ledger .status.pending { color: var(--steel); }
       });
   });
 
-  $('polybtn').addEventListener('click', function () {
-    $('parseerr').hidden = true;
-    api('/api/matches/polymarket')
+  $('polyBtn').addEventListener('click', function () {
+    $('polyerr').hidden = true;
+    var d = $('polyDate').value;
+    var path = '/api/matches/polymarket?limit=40' + (d ? '&date=' + encodeURIComponent(d) : '');
+    api(path)
       .then(function (list) {
         if (!list.length) { throw new Error('Polymarket 暂无可用世界杯市场。'); }
         setMatches(list);
       })
       .catch(function (e) {
-        $('parseerr').textContent = '拉取失败：' + e.message;
-        $('parseerr').hidden = false;
+        $('polyerr').textContent = '拉取失败：' + e.message;
+        $('polyerr').hidden = false;
       });
   });
+
+  // ---- populate Polymarket date selector ----
+  function loadPolyDates() {
+    api('/api/matches/polymarket/dates')
+      .then(function (dates) {
+        var sel = $('polyDate');
+        sel.innerHTML = '<option value="">全部（前40场）</option>';
+        (dates || []).forEach(function (d) {
+          var opt = document.createElement('option');
+          opt.value = d.date;
+          opt.textContent = d.date.slice(5) + ' · ' + d.count + '场';
+          sel.appendChild(opt);
+        });
+      })
+      .catch(function (e) {
+        $('polyerr').textContent = '日期加载失败：' + e.message;
+        $('polyerr').hidden = false;
+      });
+  }
 
   // ---- render match queue ----
   function renderMatches() {
@@ -649,6 +677,7 @@ table.ledger .status.pending { color: var(--steel); }
 
   // ---- boot ----
   loadConfig();
+  loadPolyDates();
   renderMatches(); renderPredEmpty();
   refreshLedger();
 })();

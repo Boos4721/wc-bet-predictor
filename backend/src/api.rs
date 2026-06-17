@@ -20,6 +20,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/matches", post(parse_matches))
         .route("/api/matches/polymarket", get(polymarket_matches))
+        .route("/api/matches/polymarket/dates", get(polymarket_dates))
         .route("/api/predict", post(predict))
         .route("/api/bets", get(list_bets).post(place_bet))
         .route("/api/settle", post(settle))
@@ -42,9 +43,20 @@ async fn parse_matches(Json(b): Json<RawIn>) -> impl IntoResponse {
     }
 }
 
-async fn polymarket_matches() -> impl IntoResponse {
-    match polymarket::fetch_matches().await {
+#[derive(Deserialize)]
+struct PolyQuery { date: Option<String>, limit: Option<usize> }
+
+async fn polymarket_matches(Query(q): Query<PolyQuery>) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(40).min(200);
+    match polymarket::fetch_matches(q.date.as_deref(), limit).await {
         Ok(ms) => (StatusCode::OK, Json(json!(ms))).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e).into_response(),
+    }
+}
+
+async fn polymarket_dates() -> impl IntoResponse {
+    match polymarket::fetch_dates().await {
+        Ok(d) => (StatusCode::OK, Json(json!(d))).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e).into_response(),
     }
 }
