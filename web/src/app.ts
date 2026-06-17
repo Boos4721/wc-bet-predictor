@@ -477,7 +477,7 @@ function showPrediction(m: Match, p: Prediction): void {
       if (addCalcLeg(label, p.pick_odds as number)) {
         errEl.hidden = true;
       } else {
-        errEl.textContent = `最多 ${MAX_LEGS} 条投注腿,请先删除部分腿。`;
+        errEl.textContent = `最多 ${MAX_LEGS} 条投注选项,请先删除部分。`;
         errEl.hidden = false;
       }
     });
@@ -714,7 +714,7 @@ function addLegFromMatch(): void {
   if (!g || !o) { calcErr.textContent = "该赛事暂无可选玩法。"; calcErr.hidden = false; return; }
   if (!(o.prob > 1)) { calcErr.textContent = "该选项暂无有效赔率。"; calcErr.hidden = false; return; }
   if (!addCalcLeg(`${m.home} vs ${m.away} ${g.label} ${o.label}`, o.prob)) {
-    calcErr.textContent = `最多 ${MAX_LEGS} 条投注腿,请先删除部分腿。`;
+    calcErr.textContent = `最多 ${MAX_LEGS} 条投注选项,请先删除部分。`;
     calcErr.hidden = false;
   }
 }
@@ -847,7 +847,7 @@ function renderTickets(tickets: Ticket[]): void {
     const waysTxt = ways.map((k) => k + "串1").join(", ");
     const statusCls = t.status === "Won" ? "profit" : t.status === "Lost" ? "deficit" : "pending";
     const statusTxt = t.status === "Won" ? "命中" : t.status === "Lost" ? "未中" : "待结算";
-    const legSummary = legs.map((l) => esc(l.label || "腿") + " @" + (+l.odds || 0).toFixed(2)).join("、");
+    const legSummary = legs.map((l) => esc(l.label || "选项") + " @" + (+l.odds || 0).toFixed(2)).join("、");
     const action = t.status === "Pending"
       ? '<div class="settle-btns">' +
           `<input class="well mono" type="number" min="0" step="0.01" placeholder="实际奖金" data-tpay="${t.id}" style="height:32px;width:96px;padding:4px 8px;font-size:12px" />` +
@@ -856,7 +856,7 @@ function renderTickets(tickets: Ticket[]): void {
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td class="mono">${esc(String(t.id))}</td>` +
-      `<td><span class="led-team">${legs.length} 腿 · ${esc(waysTxt || "—")}</span>` +
+      `<td><span class="led-team">${legs.length} 项 · ${esc(waysTxt || "—")}</span>` +
         `<br><span style="color:var(--steel);font-size:11px">${legSummary || "—"}</span></td>` +
       `<td class="r num">${t.multiplier || 1}</td>` +
       `<td class="r num">${(+(t.stake || 0)).toFixed(2)}</td>` +

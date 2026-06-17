@@ -115,7 +115,7 @@
       <section class="panel">
         <div class="panel-head"><h2>下单计算器</h2><span class="meta">Parlay</span></div>
         <div class="field">
-          <label>从赛事列表选择 <span class="hint">选赛事 + 玩法 + 结果，自动加为投注腿(可混合过关)</span></label>
+          <label>从赛事列表选择 <span class="hint">选赛事 + 玩法 + 结果，自动加为投注选项(可混合过关)</span></label>
           <select class="well" id="calcMatch"></select>
           <div style="display:flex;gap:8px;margin-top:8px">
             <select class="well" id="calcPlay" style="flex:0 0 40%"></select>
@@ -125,10 +125,10 @@
           <div class="err" id="calcPickErr" hidden></div>
         </div>
         <div class="field">
-          <label>投注腿 <span class="hint">label @ odds，最多 8 腿</span></label>
+          <label>投注选项 <span class="hint">名称 @ 赔率，最多 8 项</span></label>
           <div id="calcLegs"></div>
-          <div class="calc-empty" id="calcLegsEmpty">尚未添加投注腿。点击「+ 添加腿」或在预测卡中「加入计算器」。</div>
-          <button class="btn btn-ghost btn-sm" id="calcAddLeg" style="margin-top:8px">+ 添加腿</button>
+          <div class="calc-empty" id="calcLegsEmpty">尚未添加投注选项。点击「+ 添加选项」或在预测卡中「加入计算器」。</div>
+          <button class="btn btn-ghost btn-sm" id="calcAddLeg" style="margin-top:8px">+ 添加选项</button>
         </div>
         <div class="field">
           <label>过关方式 <span class="hint">复式可多选</span></label>
@@ -173,7 +173,7 @@
           <table class="ledger" id="ticketTable" hidden>
             <thead>
               <tr>
-                <th>单号</th><th>腿数/过关</th>
+                <th>单号</th><th>选项数/过关</th>
                 <th class="r">倍数</th><th class="r">投注额</th><th class="r">最高奖金</th>
                 <th>状态</th><th class="r">结算</th>
               </tr>
