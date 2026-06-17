@@ -113,16 +113,6 @@
       </section>
 
       <section class="panel">
-        <div class="panel-head"><h2>对话助手</h2><span class="meta">Agent</span></div>
-        <div id="chatLog" style="max-height:360px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px;margin-bottom:14px"></div>
-        <div class="err" id="chatErr" hidden></div>
-        <div style="display:flex;gap:10px;align-items:flex-end">
-          <textarea class="well mono" id="chatInput" placeholder="问我今天哪场值得关注…" style="flex:1;min-height:52px"></textarea>
-          <button class="btn btn-primary" id="chatSend" style="width:auto;flex:0 0 auto">发送</button>
-        </div>
-      </section>
-
-      <section class="panel">
         <div class="panel-head"><h2>下单计算器</h2><span class="meta">Parlay</span></div>
         <div class="field">
           <label>从赛事列表选择 <span class="hint">选赛事 + 玩法 + 结果，自动加为投注选项(可混合过关)</span></label>
@@ -194,6 +184,18 @@
       </section>
 
     </main>
+
+    <aside class="agent">
+      <section class="panel">
+        <div class="panel-head"><h2>Agent</h2><span class="meta">Chat</span></div>
+        <div id="chatLog" style="max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px;margin-bottom:14px"></div>
+        <div class="err" id="chatErr" hidden></div>
+        <div style="display:flex;gap:10px;align-items:flex-end">
+          <textarea class="well mono" id="chatInput" placeholder="问我今天哪场值得关注…" style="flex:1;min-height:52px"></textarea>
+          <button class="btn btn-primary" id="chatSend" style="width:auto;flex:0 0 auto">发送</button>
+        </div>
+      </section>
+    </aside>
   </div>
 </div>
 <!-- app logic lives in src/app.ts (typed); Vite bundles it into dist/ -->
