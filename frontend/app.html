@@ -365,14 +365,16 @@ table.ledger .status.pending { color: var(--steel); }
   var prediction = null; // last Prediction for the selected match
   var play = 'HAD';      // active 玩法 (bet type) for /api/predict
 
-  // 玩法 (bet-type) presets — value is the backend `play` code
-  var PLAYS = [
-    { code: 'HAD',  name: '胜平负' },
-    { code: 'HHAD', name: '让球胜平负' },
-    { code: 'CRS',  name: '比分' },
-    { code: 'TTG',  name: '总进球数' },
-    { code: 'HAFU', name: '半全场' }
-  ];
+  // 玩法 (bet-type) presets per data source — [code, name]; value is the
+  // backend `play` code. 体彩 and Polymarket offer different markets.
+  var PLAYS = {
+    sporttery:  [['HAD','胜平负'],['HHAD','让球胜平负'],['CRS','比分'],['TTG','总进球数'],['HAFU','半全场']],
+    polymarket: [['HAD','输赢'],['CRS','比分'],['HT','半场']]
+  };
+
+  // active source's play list, and the default play for that source
+  function playList() { return PLAYS[source] || PLAYS.sporttery; }
+  function defaultPlay() { return playList()[0][0]; }
 
   // ---- fetch helper ----
   function api(path, opts) {
@@ -604,9 +606,11 @@ table.ledger .status.pending { color: var(--steel); }
     }
   });
 
-  // source toggle — reset pager state and reload the new source's days
+  // source toggle — reset pager state, reset 玩法 to the new source's first
+  // play (so a stale 体彩-only play doesn't carry into Polymarket), reload days
   $('srcSel').addEventListener('change', function () {
     source = $('srcSel').value;
+    play = defaultPlay();
     polyDates = []; polyIdx = 0;
     setMatches([]);
     renderPager();
@@ -675,8 +679,11 @@ table.ledger .status.pending { color: var(--steel); }
   function renderPredEmpty() {
     var m = currentMatch();
     if (!m) { $('predHost').innerHTML = '<div class="pred-empty"><p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。</p></div>'; return; }
-    var playOpts = PLAYS.map(function (p) {
-      return '<option value="' + p.code + '"' + (p.code === play ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+    var list = playList();
+    // keep `play` valid for the active source before rendering options
+    if (!list.some(function (p) { return p[0] === play; })) { play = list[0][0]; }
+    var playOpts = list.map(function (p) {
+      return '<option value="' + p[0] + '"' + (p[0] === play ? ' selected' : '') + '>' + esc(p[1]) + '</option>';
     }).join('');
     $('predHost').innerHTML =
       '<div class="pred-card">' +
