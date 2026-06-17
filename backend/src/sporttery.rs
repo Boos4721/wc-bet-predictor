@@ -41,6 +41,8 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
             let home = sm["homeTeamAllName"].as_str().unwrap_or("").to_string();
             let away = sm["awayTeamAllName"].as_str().unwrap_or("").to_string();
             let league = sm["leagueAllName"].as_str().unwrap_or("").to_string();
+            // 仅保留世界杯赛事,过滤其他联赛(芬兰超级联赛等)。
+            if league != "世界杯" { continue; }
             let kickoff = sm["businessDate"].as_str().unwrap_or("").to_string();
             let num = sm["matchNumStr"].as_str().unwrap_or("").to_string();
             let match_date = sm["matchDate"].as_str().unwrap_or("").to_string();
@@ -157,6 +159,30 @@ mod tests {
         // CRS/HHAD 不产出 HAD 行;只 HAD 有效
         let ms = map_matches(&root());
         assert!(ms.iter().all(|m| !m.id.contains("CRS")));
+    }
+
+    #[test]
+    fn filters_out_non_world_cup_leagues() {
+        let mixed = serde_json::json!({ "value": { "matchInfoList": [
+            { "businessDate": "2026-06-17", "subMatchList": [
+                {
+                    "homeTeamAllName": "赫尔辛基", "awayTeamAllName": "国际图尔库",
+                    "leagueAllName": "芬兰超级联赛", "matchDate": "2026-06-17", "matchTime": "23:00",
+                    "businessDate": "2026-06-17", "matchNumStr": "周三201",
+                    "oddsList": [ { "poolCode": "HAD", "h": "2.25", "d": "3.10", "a": "2.76", "goalLine": "" } ]
+                },
+                {
+                    "homeTeamAllName": "葡萄牙", "awayTeamAllName": "刚果(金)",
+                    "leagueAllName": "世界杯", "matchDate": "2026-06-18", "matchTime": "01:00",
+                    "businessDate": "2026-06-17", "matchNumStr": "周三021",
+                    "oddsList": [ { "poolCode": "HAD", "h": "1.13", "d": "5.86", "a": "13.50", "goalLine": "" } ]
+                }
+            ]}
+        ]}});
+        let ms = map_matches(&mixed);
+        assert_eq!(ms.len(), 1);
+        assert_eq!(ms[0].league, "世界杯");
+        assert_eq!(ms[0].home, "葡萄牙");
     }
 
     #[test]
