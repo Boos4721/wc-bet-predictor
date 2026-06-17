@@ -80,13 +80,19 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
 async fn fetch_raw() -> Result<Value, String> {
     let client = reqwest::Client::new();
     let resp = client.get(LIST_URL)
-        // 标准浏览器 UA + Referer:该公开接口对常规请求返回 200;
-        // 仅在使用异常 UA 时被 WAF 拦截。此处不做任何指纹伪装/代理规避。
+        // 发送常规浏览器请求头(UA / Referer / Accept 等):该公开接口对完整的
+        // 浏览器式请求返回 200,缺头时可能被 WAF 误拦。此处不做任何指纹伪造/代理规避。
         .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
         .header("referer", "https://www.sporttery.cn/")
+        .header("accept", "application/json, text/plain, */*")
+        .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .header("origin", "https://www.sporttery.cn")
         .send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("Sporttery HTTP {}", resp.status()));
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(160).collect();
+        return Err(format!("Sporttery HTTP {code}: {snippet}"));
     }
     resp.json().await.map_err(|e| e.to_string())
 }
