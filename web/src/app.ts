@@ -628,24 +628,85 @@ function renderCalcMatch(): void {
   const prev = sel.value;
   if (!matches.length) {
     sel.innerHTML = '<option value="">先在上方解析或加载赛事</option>';
+    renderCalcPlays();
     return;
   }
   sel.innerHTML = matches.map((m) =>
     `<option value="${esc(m.id)}">${esc(m.id + " " + m.home + " vs " + m.away)}</option>`).join("");
   if (prev && matches.some((m) => m.id === prev)) sel.value = prev;
+  renderCalcPlays();
 }
 
-// add a leg from the selected match + outcome (主胜/平局/客胜).
-function addLegFromMatch(pick: "home" | "draw" | "away"): void {
-  const calcErr = el("calcErr");
-  calcErr.hidden = true;
+// 返回某场赛事当前可选的玩法 → 各玩法的结果选项(label+odds)。
+// 只列出有真实赔率的玩法;总进球数/半全场无赔率源,需手动添加腿。
+function matchPlayOptions(m: Match): Array<{ play: string; label: string; opts: ProbOption[] }> {
+  const out: Array<{ play: string; label: string; opts: ProbOption[] }> = [];
+  const o = m.odds;
+  if (o && o.home > 1 && o.away > 1) {
+    const three: ProbOption[] = [{ label: "主胜", prob: o.home }];
+    if (o.draw > 1) three.push({ label: "平局", prob: o.draw });
+    three.push({ label: "客胜", prob: o.away });
+    out.push({ play: "胜平负", label: "胜平负", opts: three });
+  }
+  const h = m.hhad_odds;
+  if (h && h.home > 1 && h.away > 1) {
+    const ln = m.hhad_line != null ? `(让${m.hhad_line})` : "";
+    const three: ProbOption[] = [{ label: "主胜", prob: h.home }];
+    if (h.draw > 1) three.push({ label: "平局", prob: h.draw });
+    three.push({ label: "客胜", prob: h.away });
+    out.push({ play: "让球胜平负" + ln, label: "让球胜平负", opts: three });
+  }
+  if (m.pm_score && m.pm_score.length) {
+    out.push({ play: "比分", label: "比分", opts: m.pm_score.map((s) => ({ label: s.label, prob: s.odds })) });
+  }
+  if (m.pm_halftime && m.pm_halftime.length) {
+    out.push({ play: "半场", label: "半场", opts: m.pm_halftime.map((s) => ({ label: s.label, prob: s.odds })) });
+  }
+  return out;
+}
+
+function currentCalcMatch(): Match | null {
   const sel = maybe<HTMLSelectElement>("calcMatch");
-  const m = sel && sel.value ? matches.filter((mm) => mm.id === sel.value)[0] : null;
+  return sel && sel.value ? matches.filter((mm) => mm.id === sel.value)[0] || null : null;
+}
+
+// 当所选赛事变化:重建玩法下拉
+function renderCalcPlays(): void {
+  const playSel = maybe<HTMLSelectElement>("calcPlay");
+  if (!playSel) return;
+  const m = currentCalcMatch();
+  const groups = m ? matchPlayOptions(m) : [];
+  playSel.innerHTML = groups.length
+    ? groups.map((g, i) => `<option value="${i}">${esc(g.play)}</option>`).join("")
+    : '<option value="">无可选玩法</option>';
+  renderCalcOutcomes();
+}
+
+// 当所选玩法变化:重建结果下拉
+function renderCalcOutcomes(): void {
+  const outSel = maybe<HTMLSelectElement>("calcOutcome");
+  const playSel = maybe<HTMLSelectElement>("calcPlay");
+  if (!outSel || !playSel) return;
+  const m = currentCalcMatch();
+  const groups = m ? matchPlayOptions(m) : [];
+  const g = groups[+playSel.value];
+  outSel.innerHTML = g
+    ? g.opts.map((o, i) => `<option value="${i}">${esc(o.label)} @ ${o.prob.toFixed(2)}</option>`).join("")
+    : '<option value="">—</option>';
+}
+
+// 把当前赛事/玩法/结果加为一条投注腿(混合过关)
+function addLegFromMatch(): void {
+  const calcErr = el("calcPickErr");
+  calcErr.hidden = true;
+  const m = currentCalcMatch();
   if (!m) { calcErr.textContent = "请先选择一场赛事。"; calcErr.hidden = false; return; }
-  const odds = pick === "home" ? m.odds.home : pick === "away" ? m.odds.away : m.odds.draw;
-  if (!(odds > 1)) { calcErr.textContent = "该选项暂无有效赔率，无法加入。"; calcErr.hidden = false; return; }
-  const pickLabel = pick === "home" ? "主胜" : pick === "away" ? "客胜" : "平局";
-  addCalcLeg(`${m.home} ${pickLabel}`, odds);
+  const groups = matchPlayOptions(m);
+  const g = groups[+(maybe<HTMLSelectElement>("calcPlay")?.value || -1)];
+  const o = g && g.opts[+(maybe<HTMLSelectElement>("calcOutcome")?.value || -1)];
+  if (!g || !o) { calcErr.textContent = "该赛事暂无可选玩法。"; calcErr.hidden = false; return; }
+  if (!(o.prob > 1)) { calcErr.textContent = "该选项暂无有效赔率。"; calcErr.hidden = false; return; }
+  addCalcLeg(`${m.home} vs ${m.away} ${g.label} ${o.label}`, o.prob);
 }
 
 // default 过关 selection: N==1 → 1串1; N>=2 → N串1. Preserve still-valid user
@@ -692,7 +753,7 @@ function renderCalc(): void {
   // ways checkboxes (k = 1..N)
   const ways = el("calcWays"); ways.innerHTML = "";
   const n = calcLegs.length;
-  if (!n) ways.innerHTML = '<span class="calc-empty" style="padding:0">添加投注腿后选择过关方式。</span>';
+  if (!n) ways.innerHTML = '<span class="calc-empty" style="padding:0">添加投注后选择过关方式。</span>';
   for (let k = 1; k <= n; k++) {
     const lab = document.createElement("label");
     lab.className = "calc-way" + (calcWays[k] ? " on" : "");
@@ -830,9 +891,9 @@ el<HTMLSelectElement>("srcSel").addEventListener("change", function () {
   loadStatus();
 });
 el("calcAddLeg").addEventListener("click", () => addCalcLeg("", 2.00));
-el("calcPickHome").addEventListener("click", () => addLegFromMatch("home"));
-el("calcPickDraw").addEventListener("click", () => addLegFromMatch("draw"));
-el("calcPickAway").addEventListener("click", () => addLegFromMatch("away"));
+el<HTMLSelectElement>("calcMatch").addEventListener("change", renderCalcPlays);
+el<HTMLSelectElement>("calcPlay").addEventListener("change", renderCalcOutcomes);
+el("calcAddPick").addEventListener("click", addLegFromMatch);
 el("calcMult").addEventListener("input", updateCalcReadout);
 el("calcLogBtn").addEventListener("click", logTicket);
 el("clearLedgerBtn").addEventListener("click", () => {
