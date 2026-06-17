@@ -1,4 +1,4 @@
-// 竞彩预测 · 模拟账本 — terminal logic, ported to TypeScript.
+// 世界鸡预测 — terminal logic, ported to TypeScript.
 // 1:1 behavioral port of the former inline script; backend is source of truth.
 import "./app.css";
 import { LAYOUT } from "./layout";
@@ -1019,7 +1019,7 @@ async function exportScreenshot(): Promise<void> {
     const url = canvas.toDataURL("image/png");
     const a = document.createElement("a");
     const ts = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-    a.href = url; a.download = `竞彩预测-${ts}.png`;
+    a.href = url; a.download = `世界鸡预测-${ts}.png`;
     a.click();
   } catch (e) {
     alert("导出失败：" + (e as Error).message);

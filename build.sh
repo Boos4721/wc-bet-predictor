@@ -32,7 +32,7 @@ cp README.md "$OUT/" 2>/dev/null || true
 # 启动脚本:在产物目录内运行二进制(数据文件落在此目录)
 cat > "$OUT/run.sh" <<'EOF'
 #!/usr/bin/env bash
-# 启动竞彩预测终端。数据文件(ledger.db / config.local.json / *_cache.json)
+# 启动世界鸡预测终端。数据文件(ledger.db / config.local.json / *_cache.json)
 # 写入本目录。打开 http://127.0.0.1:8787
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"

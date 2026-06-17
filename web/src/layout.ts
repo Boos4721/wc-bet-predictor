@@ -6,7 +6,7 @@ export const LAYOUT = `
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
-      <h1>竞彩预测 · 模拟账本</h1>
+      <h1>世界鸡预测</h1>
       <span class="tag">Prediction Terminal</span>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
