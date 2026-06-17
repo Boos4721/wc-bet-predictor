@@ -363,6 +363,16 @@ table.ledger .status.pending { color: var(--steel); }
   var matchMap = {};     // id -> "home vs away" for nicer ledger display
   var selId = null;
   var prediction = null; // last Prediction for the selected match
+  var play = 'HAD';      // active 玩法 (bet type) for /api/predict
+
+  // 玩法 (bet-type) presets — value is the backend `play` code
+  var PLAYS = [
+    { code: 'HAD',  name: '胜平负' },
+    { code: 'HHAD', name: '让球胜平负' },
+    { code: 'CRS',  name: '比分' },
+    { code: 'TTG',  name: '总进球数' },
+    { code: 'HAFU', name: '半全场' }
+  ];
 
   // ---- fetch helper ----
   function api(path, opts) {
@@ -665,13 +675,19 @@ table.ledger .status.pending { color: var(--steel); }
   function renderPredEmpty() {
     var m = currentMatch();
     if (!m) { $('predHost').innerHTML = '<div class="pred-empty"><p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。</p></div>'; return; }
+    var playOpts = PLAYS.map(function (p) {
+      return '<option value="' + p.code + '"' + (p.code === play ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+    }).join('');
     $('predHost').innerHTML =
       '<div class="pred-card">' +
         '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
         '<div class="pred-league">' + esc(m.league) + ' · 赔率 ' + oddsLine(m) + '</div>' +
+        '<div class="field" style="max-width:220px;margin-bottom:16px"><label for="playSel">玩法</label>' +
+          '<select class="well" id="playSel">' + playOpts + '</select></div>' +
         '<div class="err" id="prederr" hidden></div>' +
         '<button class="btn btn-primary" id="predbtn" style="width:auto;padding-left:32px;padding-right:32px">预测</button>' +
       '</div>';
+    $('playSel').addEventListener('change', function () { play = $('playSel').value; });
     $('predbtn').addEventListener('click', runPredict);
   }
 
@@ -681,7 +697,7 @@ table.ledger .status.pending { color: var(--steel); }
       '<div class="pred-card"><div class="shimmer-label mono">预测中…</div>' +
       '<div class="shimmer-line w50"></div><div class="shimmer-line bar"></div>' +
       '<div class="shimmer-line"></div><div class="shimmer-line w70"></div></div>';
-    postJSON('/api/predict', m)
+    postJSON('/api/predict', { match: m, play: play })
       .then(function (p) { prediction = p; showPrediction(m, p); })
       .catch(function (e) { showPredError(m, e); });
   }
@@ -696,39 +712,43 @@ table.ledger .status.pending { color: var(--steel); }
   }
 
   function showPrediction(m, p) {
-    var probs = p.probs || { home: 0, draw: 0, away: 0 };
-    var order = [['Home', probs.home, m.home], ['Draw', probs.draw, '平局'], ['Away', probs.away, m.away]];
-    var pickTeam = p.pick === 'Home' ? m.home : p.pick === 'Away' ? m.away : '平局';
-    var pickOdds = oddsForPick(m, p.pick);
+    var options = (p.options || []).slice().sort(function (a, b) { return (b.prob || 0) - (a.prob || 0); });
     var conf = (p.confidence || 0) * 100;
+    var hasOdds = typeof p.pick_odds === 'number' && p.pick !== null && p.pick !== undefined;
 
     var segs = '';
-    order.forEach(function (o) {
-      var cls = o[0] === p.pick ? 'pick' : 'rest';
-      var w = Math.round((o[1] || 0) * 100);
-      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:' + (o[1] || 0) + '">' +
-        '<span class="lab">' + PICK_LABEL[o[0]] + '</span><span class="num">' + w + '%</span></div>';
+    options.forEach(function (o) {
+      var cls = o.label === p.pick_label ? 'pick' : 'rest';
+      var w = Math.round((o.prob || 0) * 100);
+      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:' + (o.prob || 0) + '">' +
+        '<span class="lab">' + esc(o.label) + '</span><span class="num">' + w + '%</span></div>';
     });
+
+    var oddsCell = hasOdds ? p.pick_odds.toFixed(2) : '—';
+
+    var actions = hasOdds
+      ? '<div class="pred-actions">' +
+          '<div class="stake-field field" style="margin:0"><label for="stake">模拟本金</label>' +
+            '<input class="well mono" id="stake" type="number" min="1" step="1" value="100" /></div>' +
+          '<button class="btn btn-primary" id="logbtn" style="width:auto;flex:0 0 auto">记一笔</button>' +
+        '</div>' +
+        '<div class="err" id="logerr" hidden></div>'
+      : '<div class="pred-rationale" style="border-top:none;padding-top:12px;color:var(--steel)">该玩法为纯预测，不计入账本。</div>';
 
     $('predHost').innerHTML =
       '<div class="pred-card pred-reveal">' +
         '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
         '<div class="pred-league">' + esc(m.league) + ' · 模型 ' + esc(p.model || '') + '</div>' +
         '<div class="prob-wrap"><div class="prob-bar" id="probBar">' + segs + '</div>' +
-          '<div class="prob-legend"><span><i class="k" style="background:var(--teal)"></i>建议选择</span>' +
+          '<div class="prob-legend"><span><i class="k" style="background:var(--teal)"></i>建议结果</span>' +
           '<span><i class="k" style="background:#CDD5DF"></i>其余结果</span></div></div>' +
         '<div class="pred-grid">' +
-          '<div class="pred-cell"><div class="l">建议选择</div><div class="v teal">' + esc(PICK_LABEL[p.pick] + ' · ' + pickTeam) + '</div></div>' +
+          '<div class="pred-cell"><div class="l">建议结果</div><div class="v teal">' + esc(p.pick_label || '—') + '</div></div>' +
           '<div class="pred-cell"><div class="l">置信概率</div><div class="v num">' + conf.toFixed(1) + '%</div></div>' +
-          '<div class="pred-cell"><div class="l">选项赔率</div><div class="v num">' + oddsTxt(pickOdds) + '</div></div>' +
+          '<div class="pred-cell"><div class="l">选项赔率</div><div class="v num">' + oddsCell + '</div></div>' +
         '</div>' +
         '<div class="pred-rationale">' + esc(p.rationale || '') + '</div>' +
-        '<div class="pred-actions">' +
-          '<div class="stake-field field" style="margin:0"><label for="stake">模拟本金</label>' +
-            '<input class="well mono" id="stake" type="number" min="1" step="1" value="100" /></div>' +
-          '<button class="btn btn-primary" id="logbtn" style="width:auto;flex:0 0 auto">记一笔</button>' +
-        '</div>' +
-        '<div class="err" id="logerr" hidden></div>' +
+        actions +
       '</div>';
 
     // reveal: clip-path wipe on the whole bar (compositor-only, no layout).
@@ -742,11 +762,13 @@ table.ledger .status.pending { color: var(--steel); }
       });
     });
 
-    $('logbtn').addEventListener('click', function () {
-      var stake = parseFloat($('stake').value);
-      if (!(stake > 0)) { $('stake').focus(); return; }
-      logBet(m, p.pick, pickOdds, stake);
-    });
+    if (hasOdds) {
+      $('logbtn').addEventListener('click', function () {
+        var stake = parseFloat($('stake').value);
+        if (!(stake > 0)) { $('stake').focus(); return; }
+        logBet(m, p.pick, p.pick_odds, stake);
+      });
+    }
   }
 
   // ---- ledger ----
