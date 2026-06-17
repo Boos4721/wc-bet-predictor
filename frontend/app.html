@@ -271,11 +271,13 @@ table.ledger .status.pending { color: var(--steel); }
           <button class="btn btn-primary" id="parsebtn">解析赛事</button>
         </div>
         <div class="field" style="margin-top:14px;margin-bottom:0">
-          <label for="polyDate">Polymarket 世界杯 · 按解算日</label>
-          <div style="display:flex;gap:8px;align-items:center">
-            <select class="well" id="polyDate" style="flex:1"><option value="">全部（前40场）</option></select>
-            <button class="btn btn-ghost btn-sm" id="polyBtn" style="flex:0 0 auto;white-space:nowrap">拉取该日</button>
+          <label for="polyDate">Polymarket 世界杯 · 按比赛日</label>
+          <div class="well" style="display:flex;align-items:center;gap:8px;padding:8px">
+            <button class="btn btn-ghost btn-sm" id="polyPrev" style="flex:0 0 auto;white-space:nowrap">◀ 前一天</button>
+            <div id="polyDayLabel" style="flex:1;text-align:center;font-size:12px;line-height:1.3">—</div>
+            <button class="btn btn-ghost btn-sm" id="polyNext" style="flex:0 0 auto;white-space:nowrap">后一天 ▶</button>
           </div>
+          <select class="well" id="polyDate" style="margin-top:8px"></select>
           <div class="err" id="polyerr" hidden></div>
         </div>
       </section>
@@ -433,33 +435,83 @@ table.ledger .status.pending { color: var(--steel); }
       });
   });
 
-  $('polyBtn').addEventListener('click', function () {
+  // ---- Polymarket day-by-day pager ----
+  var polyDates = [];  // [{date, count}] ascending from backend
+  var polyIdx = 0;     // current index into polyDates
+
+  function todayISO() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function renderPager() {
+    var sel = $('polyDate');
+    var prev = $('polyPrev'), next = $('polyNext'), label = $('polyDayLabel');
+    if (!polyDates.length) {
+      sel.innerHTML = '<option value="">暂无可用比赛日</option>';
+      label.textContent = '暂无可用比赛日';
+      prev.disabled = true; next.disabled = true;
+      return;
+    }
+    sel.innerHTML = '';
+    polyDates.forEach(function (d, i) {
+      var opt = document.createElement('option');
+      opt.value = d.date;
+      opt.textContent = d.date.slice(5) + ' · ' + d.count + '场';
+      if (i === polyIdx) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    var cur = polyDates[polyIdx];
+    label.innerHTML = '<b>' + esc(cur.date.slice(5)) + ' · ' + cur.count + ' 场</b>' +
+      '<br><span style="color:var(--steel)">第 ' + (polyIdx + 1) + ' / 共 ' + polyDates.length + ' 天</span>';
+    prev.disabled = polyIdx <= 0;
+    next.disabled = polyIdx >= polyDates.length - 1;
+  }
+
+  function loadPolyDay() {
+    if (!polyDates.length) return;
     $('polyerr').hidden = true;
-    var d = $('polyDate').value;
-    var path = '/api/matches/polymarket?limit=40' + (d ? '&date=' + encodeURIComponent(d) : '');
-    api(path)
-      .then(function (list) {
-        if (!list.length) { throw new Error('Polymarket 暂无可用世界杯市场。'); }
-        setMatches(list);
-      })
+    var date = polyDates[polyIdx].date;
+    $('matchcount').textContent = '加载中…';
+    api('/api/matches/polymarket?limit=40&date=' + encodeURIComponent(date))
+      .then(function (list) { setMatches(list); })
       .catch(function (e) {
+        $('matchcount').textContent = matches.length + ' 场';
         $('polyerr').textContent = '拉取失败：' + e.message;
         $('polyerr').hidden = false;
       });
+  }
+
+  function gotoPolyIdx(i) {
+    if (!polyDates.length) return;
+    polyIdx = Math.max(0, Math.min(polyDates.length - 1, i));
+    renderPager();
+    loadPolyDay();
+  }
+
+  $('polyPrev').addEventListener('click', function () { gotoPolyIdx(polyIdx - 1); });
+  $('polyNext').addEventListener('click', function () { gotoPolyIdx(polyIdx + 1); });
+  $('polyDate').addEventListener('change', function () {
+    var v = $('polyDate').value;
+    for (var i = 0; i < polyDates.length; i++) {
+      if (polyDates[i].date === v) { gotoPolyIdx(i); return; }
+    }
   });
 
-  // ---- populate Polymarket date selector ----
+  // ---- load available match-days, then auto-load the first day >= today ----
   function loadPolyDates() {
     api('/api/matches/polymarket/dates')
       .then(function (dates) {
-        var sel = $('polyDate');
-        sel.innerHTML = '<option value="">全部（前40场）</option>';
-        (dates || []).forEach(function (d) {
-          var opt = document.createElement('option');
-          opt.value = d.date;
-          opt.textContent = d.date.slice(5) + ' · ' + d.count + '场';
-          sel.appendChild(opt);
-        });
+        polyDates = dates || [];
+        if (!polyDates.length) { renderPager(); return; }
+        var today = todayISO();
+        polyIdx = 0;
+        for (var i = 0; i < polyDates.length; i++) {
+          if (polyDates[i].date >= today) { polyIdx = i; break; }
+        }
+        renderPager();
+        loadPolyDay();
       })
       .catch(function (e) {
         $('polyerr').textContent = '日期加载失败：' + e.message;

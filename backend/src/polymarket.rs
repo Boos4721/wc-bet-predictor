@@ -3,26 +3,34 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const GAMMA_URL: &str =
-    "https://gamma-api.polymarket.com/events?closed=false&limit=100&tag_slug=world-cup";
+const SERIES_URL: &str =
+    "https://gamma-api.polymarket.com/events?closed=false&series_id=11433";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DateCount { pub date: String, pub count: usize }
 
 async fn fetch_events() -> Result<Value, String> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(GAMMA_URL)
-        .header("user-agent", "wc-bet-predictor")
-        .send().await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Polymarket HTTP {}", resp.status()));
+    let mut all: Vec<Value> = Vec::new();
+    let mut offset = 0;
+    loop {
+        let url = format!("{SERIES_URL}&limit=100&offset={offset}");
+        let resp = client.get(&url)
+            .header("user-agent", "wc-bet-predictor")
+            .send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("Polymarket HTTP {}", resp.status()));
+        }
+        let page: Value = resp.json().await.map_err(|e| e.to_string())?;
+        let arr = page.as_array().cloned().unwrap_or_default();
+        let n = arr.len();
+        all.extend(arr);
+        if n < 100 || all.len() >= 500 { break; }
+        offset += 100;
     }
-    resp.json().await.map_err(|e| e.to_string())
+    Ok(Value::Array(all))
 }
 
-/// 拉取并映射为 Match;date=Some 时只保留该解算日,limit 截断数量。
 pub async fn fetch_matches(date: Option<&str>, limit: usize) -> Result<Vec<Match>, String> {
     let events = fetch_events().await?;
     let mut ms = map_events(&events);
@@ -33,38 +41,80 @@ pub async fn fetch_matches(date: Option<&str>, limit: usize) -> Result<Vec<Match
     Ok(ms)
 }
 
-/// 拉取并返回每个解算日的可下注市场数量(升序日期)。
 pub async fn fetch_dates() -> Result<Vec<DateCount>, String> {
     let events = fetch_events().await?;
     Ok(available_dates(&map_events(&events)))
 }
 
-fn pick_date(e: &Value) -> String {
-    let s = e["endDate"].as_str()
-        .or_else(|| e["startDate"].as_str())
-        .unwrap_or("");
-    s.chars().take(10).collect()
+/// 取 slug 末尾的 YYYY-MM-DD(形如 fifwc-eng-hrv-2026-06-17)
+fn slug_date(slug: &str) -> Option<String> {
+    if slug.len() < 10 { return None; }
+    let tail = &slug[slug.len() - 10..];
+    let b = tail.as_bytes();
+    let ok = b[4] == b'-' && b[7] == b'-'
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() }
+        });
+    if ok { Some(tail.to_string()) } else { None }
 }
 
-/// 纯函数:把 Polymarket events JSON 映射为 Match 列表。
-/// kickoff = 解算日(endDate 截断为 YYYY-MM-DD,回退 startDate)。
-/// 仅保留 2-outcome 市场;价格转十进制赔率(1/price);无平局盘 draw=0。
+/// "England vs. Croatia" → ("England","Croatia"). 兼容 " vs " 与 " vs. "。
+fn split_vs(title: &str) -> Option<(String, String)> {
+    for sep in [" vs. ", " vs "] {
+        if let Some(i) = title.find(sep) {
+            let h = title[..i].trim().to_string();
+            let a = title[i + sep.len()..].trim().to_string();
+            if !h.is_empty() && !a.is_empty() { return Some((h, a)); }
+        }
+    }
+    None
+}
+
+/// 该子市场 Yes 价格(outcomePrices[0]),解析为 f64;<=0 返回 None。
+fn yes_price(m: &Value) -> Option<f64> {
+    let raw = m["outcomePrices"].as_str()?;
+    let arr: Vec<String> = serde_json::from_str(raw).ok()?;
+    let p: f64 = arr.first()?.parse().ok()?;
+    if p > 0.0 { Some(p) } else { None }
+}
+
+fn map_event(e: &Value) -> Option<Match> {
+    let slug = e["slug"].as_str().unwrap_or("");
+    let date = slug_date(slug)?;
+    let title = e["title"].as_str().unwrap_or("");
+    let (home, away) = split_vs(title)?;
+    let markets = e["markets"].as_array()?;
+    let (mut oh, mut od, mut oa) = (None, None, None);
+    for m in markets {
+        let git = m["groupItemTitle"].as_str().unwrap_or("");
+        let Some(p) = yes_price(m) else { continue };
+        if git.starts_with("Draw") { od = Some(1.0 / p); }
+        else if git == home { oh = Some(1.0 / p); }
+        else if git == away { oa = Some(1.0 / p); }
+    }
+    let id = e["id"].as_str().map(|s| s.to_string())
+        .unwrap_or_else(|| slug.to_string());
+    Some(Match {
+        id,
+        league: "世界杯".to_string(),
+        home, away,
+        kickoff: date,
+        odds: Odds { home: oh?, draw: od?, away: oa? },
+        handicap: None,
+    })
+}
+
 pub fn map_events(events: &Value) -> Vec<Match> {
     let mut out = Vec::new();
     let Some(arr) = events.as_array() else { return out; };
     for e in arr {
-        let date = pick_date(e);
-        let Some(markets) = e["markets"].as_array() else { continue; };
-        for m in markets {
-            if let Some(mt) = map_market(m, &date) {
-                out.push(mt);
-            }
-        }
+        if let Some(m) = map_event(e) { out.push(m); }
     }
+    // 按比赛日 + 主队稳定排序
+    out.sort_by(|a, b| a.kickoff.cmp(&b.kickoff).then(a.home.cmp(&b.home)));
     out
 }
 
-/// 按 kickoff(解算日)聚合计数,日期升序。
 pub fn available_dates(ms: &[Match]) -> Vec<DateCount> {
     let mut map: BTreeMap<String, usize> = BTreeMap::new();
     for m in ms {
@@ -75,112 +125,83 @@ pub fn available_dates(ms: &[Match]) -> Vec<DateCount> {
     map.into_iter().map(|(date, count)| DateCount { date, count }).collect()
 }
 
-fn parse_str_array(v: &Value) -> Vec<String> {
-    // 字段是 JSON 编码的字符串,如 "[\"Yes\", \"No\"]"
-    match v.as_str() {
-        Some(s) => serde_json::from_str::<Vec<String>>(s).unwrap_or_default(),
-        None => Vec::new(),
-    }
-}
-
-fn map_market(m: &Value, date: &str) -> Option<Match> {
-    let outcomes = parse_str_array(&m["outcomes"]);
-    let prices = parse_str_array(&m["outcomePrices"]);
-    if outcomes.len() != 2 || prices.len() != 2 {
-        return None; // 只处理两选项市场
-    }
-    let p0: f64 = prices[0].parse().ok()?;
-    let p1: f64 = prices[1].parse().ok()?;
-    if p0 <= 0.0 || p1 <= 0.0 {
-        return None; // 避免除零/无穷赔率
-    }
-    let id = m["id"].as_str().unwrap_or("").to_string();
-    let label = m["question"].as_str().unwrap_or("Polymarket").to_string();
-    Some(Match {
-        id,
-        league: label,
-        home: outcomes[0].clone(),
-        away: outcomes[1].clone(),
-        kickoff: date.to_string(),
-        odds: Odds { home: 1.0 / p0, draw: 0.0, away: 1.0 / p1 },
-        handicap: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn sample_event() -> Value {
+        serde_json::json!({
+            "id": "evt1",
+            "slug": "fifwc-eng-hrv-2026-06-17",
+            "title": "England vs. Croatia",
+            "markets": [
+                { "groupItemTitle": "Croatia", "outcomePrices": "[\"0.175\", \"0.825\"]" },
+                { "groupItemTitle": "England", "outcomePrices": "[\"0.565\", \"0.435\"]" },
+                { "groupItemTitle": "Draw (England vs. Croatia)", "outcomePrices": "[\"0.255\", \"0.745\"]" }
+            ]
+        })
+    }
+
     #[test]
-    fn maps_two_way_market_with_resolution_date() {
-        let events = serde_json::json!([{
-            "title": "Will Mexico win Group A in the 2026 FIFA World Cup?",
-            "startDate": "2025-12-06T00:00:00Z",
-            "endDate": "2026-06-27T00:00:00Z",
-            "markets": [{
-                "id": "839357",
-                "question": "Will Mexico win Group A in the 2026 FIFA World Cup?",
-                "outcomes": "[\"Yes\", \"No\"]",
-                "outcomePrices": "[\"0.615\", \"0.385\"]"
-            }]
-        }]);
-        let ms = map_events(&events);
+    fn maps_three_way_game() {
+        let ms = map_events(&serde_json::json!([sample_event()]));
         assert_eq!(ms.len(), 1);
         let m = &ms[0];
-        assert_eq!(m.id, "839357");
-        assert_eq!(m.home, "Yes");
-        assert_eq!(m.away, "No");
-        assert_eq!(m.kickoff, "2026-06-27"); // resolution date, date-only
-        assert!((m.odds.home - 1.0/0.615).abs() < 1e-6);
-        assert!((m.odds.away - 1.0/0.385).abs() < 1e-6);
-        assert_eq!(m.odds.draw, 0.0);
+        assert_eq!(m.home, "England");
+        assert_eq!(m.away, "Croatia");
+        assert_eq!(m.kickoff, "2026-06-17");
+        assert!((m.odds.home - 1.0/0.565).abs() < 1e-6);
+        assert!((m.odds.draw - 1.0/0.255).abs() < 1e-6);
+        assert!((m.odds.away - 1.0/0.175).abs() < 1e-6);
     }
 
     #[test]
-    fn skips_market_with_zero_price() {
-        let events = serde_json::json!([{
-            "title": "X", "startDate": "",
-            "markets": [{ "id": "1", "question": "X",
-                "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0\", \"1\"]" }]
-        }]);
-        assert_eq!(map_events(&events).len(), 0);
+    fn skips_event_missing_an_outcome() {
+        let ev = serde_json::json!({
+            "slug": "fifwc-aaa-bbb-2026-06-18", "title": "AAA vs. BBB",
+            "markets": [
+                { "groupItemTitle": "AAA", "outcomePrices": "[\"0.5\", \"0.5\"]" },
+                { "groupItemTitle": "Draw (AAA vs. BBB)", "outcomePrices": "[\"0.3\", \"0.7\"]" }
+            ] // no away market → can't form 3-way
+        });
+        assert_eq!(map_events(&serde_json::json!([ev])).len(), 0);
     }
 
     #[test]
-    fn skips_non_two_way_market() {
-        let events = serde_json::json!([{
-            "title": "Group A Winner", "startDate": "",
-            "markets": [{ "id": "2", "question": "Group A Winner",
-                "outcomes": "[\"Mexico\",\"USA\",\"Canada\"]",
-                "outcomePrices": "[\"0.4\",\"0.35\",\"0.25\"]" }]
-        }]);
-        assert_eq!(map_events(&events).len(), 0);
+    fn skips_event_with_bad_slug_date() {
+        let ev = serde_json::json!({
+            "slug": "some-non-dated-slug", "title": "X vs. Y",
+            "markets": [
+                { "groupItemTitle": "X", "outcomePrices": "[\"0.5\",\"0.5\"]" },
+                { "groupItemTitle": "Y", "outcomePrices": "[\"0.4\",\"0.6\"]" },
+                { "groupItemTitle": "Draw (X vs. Y)", "outcomePrices": "[\"0.2\",\"0.8\"]" }
+            ]
+        });
+        assert_eq!(map_events(&serde_json::json!([ev])).len(), 0);
     }
 
     #[test]
-    fn empty_or_missing_markets_yields_empty() {
-        assert_eq!(map_events(&serde_json::json!([])).len(), 0);
-        let no_markets = serde_json::json!([{"title":"x","startDate":""}]);
-        assert_eq!(map_events(&no_markets).len(), 0);
-    }
-
-    #[test]
-    fn available_dates_counts_by_resolution_date() {
-        let events = serde_json::json!([
-            { "endDate":"2026-06-27T00:00:00Z", "markets":[
-                {"id":"1","question":"A","outcomes":"[\"Yes\",\"No\"]","outcomePrices":"[\"0.5\",\"0.5\"]"},
-                {"id":"2","question":"B","outcomes":"[\"Yes\",\"No\"]","outcomePrices":"[\"0.6\",\"0.4\"]"}
-            ]},
-            { "endDate":"2026-07-20T00:00:00Z", "markets":[
-                {"id":"3","question":"C","outcomes":"[\"Yes\",\"No\"]","outcomePrices":"[\"0.3\",\"0.7\"]"}
-            ]}
+    fn available_dates_groups_and_counts() {
+        let e1 = sample_event(); // 2026-06-17
+        let mut e2 = sample_event();
+        e2["slug"] = serde_json::json!("fifwc-bra-hai-2026-06-19");
+        e2["title"] = serde_json::json!("Brazil vs. Haiti");
+        e2["markets"] = serde_json::json!([
+            { "groupItemTitle": "Brazil", "outcomePrices": "[\"0.885\",\"0.115\"]" },
+            { "groupItemTitle": "Haiti", "outcomePrices": "[\"0.0425\",\"0.9575\"]" },
+            { "groupItemTitle": "Draw (Brazil vs. Haiti)", "outcomePrices": "[\"0.078\",\"0.922\"]" }
         ]);
-        let ms = map_events(&events);
+        let ms = map_events(&serde_json::json!([e1, e2]));
         let dates = available_dates(&ms);
         assert_eq!(dates.len(), 2);
-        assert_eq!(dates[0].date, "2026-06-27"); // BTreeMap → ascending
-        assert_eq!(dates[0].count, 2);
-        assert_eq!(dates[1].date, "2026-07-20");
+        assert_eq!(dates[0].date, "2026-06-17");
+        assert_eq!(dates[0].count, 1);
+        assert_eq!(dates[1].date, "2026-06-19");
         assert_eq!(dates[1].count, 1);
+    }
+
+    #[test]
+    fn empty_input_yields_empty() {
+        assert_eq!(map_events(&serde_json::json!([])).len(), 0);
     }
 }
