@@ -1,4 +1,4 @@
-use crate::domain::{Match, Odds};
+use crate::domain::{Match, Odds, PlayOption};
 use serde_json::Value;
 
 const SERIES_URL: &str =
@@ -93,11 +93,23 @@ fn yes_price(m: &Value) -> Option<f64> {
     if p > 0.0 { Some(p) } else { None }
 }
 
-fn map_event(e: &Value) -> Option<(String, Match)> {
-    let slug = e["slug"].as_str().unwrap_or("");
-    let date = slug_date(slug)?;
+/// 从子玩法 slug 还原其所属赛事的胜平负基础 slug:
+/// 去掉末尾的 `-exact-score` / `-halftime-result` 后缀(若有)。
+fn base_slug(slug: &str) -> &str {
+    if let Some(s) = slug.strip_suffix("-exact-score") { return s; }
+    if let Some(s) = slug.strip_suffix("-halftime-result") { return s; }
+    slug
+}
+
+/// 从 event 标题取英文主客队名;先去掉给定后缀(如 " - Exact Score")。
+fn teams_from_title(e: &Value, strip_suffix: &str) -> Option<(String, String)> {
     let title = e["title"].as_str().unwrap_or("");
-    let (home, away) = split_vs(title)?;
+    let trimmed = title.strip_suffix(strip_suffix).unwrap_or(title).trim();
+    split_vs(trimmed)
+}
+
+/// 胜平负三项赔率:按 groupItemTitle 匹配 主队/Draw/客队。
+fn moneyline_odds(e: &Value, home: &str, away: &str) -> Option<Odds> {
     let markets = e["markets"].as_array()?;
     let (mut oh, mut od, mut oa) = (None, None, None);
     for m in markets {
@@ -107,32 +119,103 @@ fn map_event(e: &Value) -> Option<(String, Match)> {
         else if git == home { oh = Some(1.0 / p); }
         else if git == away { oa = Some(1.0 / p); }
     }
-    let id = e["id"].as_str().map(|s| s.to_string())
-        .unwrap_or_else(|| slug.to_string());
-    // 真实开赛时间(ISO8601),用于排序;缺失则退回比赛日。
-    let sort_key = e["startTime"].as_str()
-        .or_else(|| e["endDate"].as_str())
-        .unwrap_or(&date)
-        .to_string();
-    let m = Match {
-        id,
-        league: "世界杯".to_string(),
-        home: translate_team(&home),
-        away: translate_team(&away),
-        kickoff: date,
-        odds: Odds { home: oh?, draw: od?, away: oa? },
-        handicap: None,
-        hhad_odds: None,
-        hhad_line: None,
-    };
-    Some((sort_key, m))
+    Some(Odds { home: oh?, draw: od?, away: oa? })
+}
+
+/// 比分玩法选项:label 把英文队名替换为中文,如
+/// "England 2 - 1 Croatia" → "英格兰 2 - 1 克罗地亚";
+/// "Exact Score: Any Other Score" → "其他比分"。odds = 1/Yes,无效则跳过。
+fn score_options(e: &Value, home: &str, away: &str) -> Vec<PlayOption> {
+    let mut out = Vec::new();
+    let Some(markets) = e["markets"].as_array() else { return out; };
+    for m in markets {
+        let git = m["groupItemTitle"].as_str().unwrap_or("");
+        let Some(p) = yes_price(m) else { continue };
+        let label = if git.contains("Any Other Score") {
+            "其他比分".to_string()
+        } else {
+            // 期望形如 "<home> <score> <away>",剥离首尾队名得中间比分。
+            let mid = git
+                .strip_prefix(home)
+                .and_then(|s| s.strip_suffix(away))
+                .map(|s| s.trim());
+            match mid {
+                Some(score) => format!("{} {} {}", translate_team(home), score, translate_team(away)),
+                None => git.to_string(), // 无法解析则原样保留
+            }
+        };
+        out.push(PlayOption { label, odds: 1.0 / p });
+    }
+    out
+}
+
+/// 半场玩法选项:home→"半场主胜", "Draw"→"半场平局", away→"半场客胜"。
+fn halftime_options(e: &Value, home: &str, away: &str) -> Vec<PlayOption> {
+    let mut out = Vec::new();
+    let Some(markets) = e["markets"].as_array() else { return out; };
+    for m in markets {
+        let git = m["groupItemTitle"].as_str().unwrap_or("");
+        let Some(p) = yes_price(m) else { continue };
+        let label = if git.starts_with("Draw") { "半场平局" }
+            else if git == home { "半场主胜" }
+            else if git == away { "半场客胜" }
+            else { continue };
+        out.push(PlayOption { label: label.to_string(), odds: 1.0 / p });
+    }
+    out
 }
 
 pub fn map_events(events: &Value) -> Vec<Match> {
-    let mut keyed: Vec<(String, Match)> = Vec::new();
     let Some(arr) = events.as_array() else { return Vec::new(); };
+
+    // 按基础 slug 归集同场的三类玩法事件。
+    use std::collections::HashMap;
+    let mut ml: HashMap<&str, &Value> = HashMap::new();
+    let mut es: HashMap<&str, &Value> = HashMap::new();
+    let mut ht: HashMap<&str, &Value> = HashMap::new();
     for e in arr {
-        if let Some(km) = map_event(e) { keyed.push(km); }
+        let slug = e["slug"].as_str().unwrap_or("");
+        let base = base_slug(slug);
+        if slug.ends_with("-exact-score") { es.insert(base, e); }
+        else if slug.ends_with("-halftime-result") { ht.insert(base, e); }
+        else { ml.insert(base, e); }
+    }
+
+    let mut keyed: Vec<(String, Match)> = Vec::new();
+    for (base, e) in ml {
+        let date = match slug_date(base) { Some(d) => d, None => continue };
+        let (home_en, away_en) = match teams_from_title(e, "") { Some(t) => t, None => continue };
+        let Some(odds) = moneyline_odds(e, &home_en, &away_en) else { continue };
+
+        let pm_score = es.get(base).map(|sev| {
+            let (h, a) = teams_from_title(sev, " - Exact Score").unwrap_or((home_en.clone(), away_en.clone()));
+            score_options(sev, &h, &a)
+        }).filter(|v| !v.is_empty());
+
+        let pm_halftime = ht.get(base).map(|hev| {
+            let (h, a) = teams_from_title(hev, " - Halftime Result").unwrap_or((home_en.clone(), away_en.clone()));
+            halftime_options(hev, &h, &a)
+        }).filter(|v| !v.is_empty());
+
+        let id = e["id"].as_str().map(|s| s.to_string()).unwrap_or_else(|| base.to_string());
+        let sort_key = e["startTime"].as_str()
+            .or_else(|| e["endDate"].as_str())
+            .unwrap_or(&date)
+            .to_string();
+        let m = Match {
+            id,
+            league: "世界杯".to_string(),
+            home: translate_team(&home_en),
+            away: translate_team(&away_en),
+            kickoff: date,
+            odds,
+            handicap: None,
+            hhad_odds: None,
+            hhad_line: None,
+            pm_score,
+            pm_halftime,
+        };
+        keyed.push((sort_key, m));
     }
     // 按真实开赛时间升序(同时间按主队稳定排序)
     keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.home.cmp(&b.1.home)));
@@ -173,6 +256,52 @@ mod tests {
         assert!((m.odds.home - 1.0/0.565).abs() < 1e-6);
         assert!((m.odds.draw - 1.0/0.255).abs() < 1e-6);
         assert!((m.odds.away - 1.0/0.175).abs() < 1e-6);
+        // 无比分/半场事件时这两个字段为 None
+        assert!(m.pm_score.is_none());
+        assert!(m.pm_halftime.is_none());
+    }
+
+    #[test]
+    fn groups_score_and_halftime_into_one_match() {
+        let moneyline = sample_event();
+        let exact = serde_json::json!({
+            "id": "evt1-es",
+            "slug": "fifwc-eng-hrv-2026-06-17-exact-score",
+            "title": "England vs. Croatia - Exact Score",
+            "markets": [
+                { "groupItemTitle": "England 2 - 1 Croatia", "outcomePrices": "[\"0.10\", \"0.90\"]" },
+                { "groupItemTitle": "England 1 - 0 Croatia", "outcomePrices": "[\"0.125\", \"0.875\"]" },
+                { "groupItemTitle": "Exact Score: Any Other Score", "outcomePrices": "[\"0.20\", \"0.80\"]" },
+                { "groupItemTitle": "England 0 - 0 Croatia", "outcomePrices": "[\"0\", \"1\"]" }
+            ]
+        });
+        let halftime = serde_json::json!({
+            "id": "evt1-ht",
+            "slug": "fifwc-eng-hrv-2026-06-17-halftime-result",
+            "title": "England vs. Croatia - Halftime Result",
+            "markets": [
+                { "groupItemTitle": "Draw", "outcomePrices": "[\"0.40\", \"0.60\"]" },
+                { "groupItemTitle": "England", "outcomePrices": "[\"0.50\", \"0.50\"]" },
+                { "groupItemTitle": "Croatia", "outcomePrices": "[\"0.20\", \"0.80\"]" }
+            ]
+        });
+        let ms = map_events(&serde_json::json!([exact, moneyline, halftime]));
+        assert_eq!(ms.len(), 1, "三类事件应合并为一场");
+        let m = &ms[0];
+        // 比分:翻译队名 + 跳过 0 价的项
+        let score = m.pm_score.as_ref().expect("应有比分选项");
+        assert_eq!(score.len(), 3); // 0-0 因 Yes=0 被跳过
+        let two_one = score.iter().find(|o| o.label == "英格兰 2 - 1 克罗地亚").unwrap();
+        assert!((two_one.odds - 1.0/0.10).abs() < 1e-6);
+        assert!(score.iter().any(|o| o.label == "其他比分"));
+        // 半场:3 项中文标签
+        let ht = m.pm_halftime.as_ref().expect("应有半场选项");
+        assert_eq!(ht.len(), 3);
+        assert!((ht.iter().find(|o| o.label == "半场主胜").unwrap().odds - 1.0/0.50).abs() < 1e-6);
+        assert!(ht.iter().any(|o| o.label == "半场平局"));
+        assert!(ht.iter().any(|o| o.label == "半场客胜"));
+        // 输赢赔率仍然来自胜平负事件
+        assert!((m.odds.home - 1.0/0.565).abs() < 1e-6);
     }
 
     #[test]

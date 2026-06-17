@@ -1,4 +1,4 @@
-use crate::domain::{Match, Outcome};
+use crate::domain::{Match, Outcome, PlayOption};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 pub enum ApiProtocol { Anthropic, OpenAI }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Play { HAD, HHAD, CRS, TTG, HAFU }
+pub enum Play { HAD, HHAD, CRS, TTG, HAFU, HT }
 
 impl Default for Play {
     fn default() -> Self { Play::HAD }
@@ -68,22 +68,82 @@ const PLAY_BASE_PROMPT: &str = "你是足球竞彩分析助手。只输出严格
 格式:{\"options\":[{\"label\":\"中文结果\",\"prob\":0到1}],\"pick\":\"Home|Draw|Away 或 null\",\
 \"pick_label\":\"推荐结果中文\",\"confidence\":0到1,\"rationale\":\"中文理由\"}。";
 
-fn play_outcome_rule(play: Play, line: Option<i32>) -> String {
+/// 给定玩法在该场比赛中的市场选项集合(label=中文,odds=小数赔率)。
+/// 返回 Some 表示该玩法有真实盘口可锚定;None 表示让模型自行构造选项空间。
+pub fn play_options(m: &Match, play: Play) -> Option<Vec<PlayOption>> {
     match play {
-        Play::HAD => "玩法=胜平负。options 恰好三项,label 用 主胜/平局/客胜,prob 三者之和≈1。pick 用 Home/Draw/Away 对应最高项。".to_string(),
-        Play::HHAD => format!("玩法=让球胜平负,让球数={}(主队让/受球)。在该让球盘口下给出 主胜/平局/客胜 三项概率(和≈1),pick 用 Home/Draw/Away。",
-            line.map(|l| l.to_string()).unwrap_or_else(|| "未知".into())),
-        Play::CRS => "玩法=正确比分。给出最可能的 6~8 个比分(label 如 \"2:1\"),prob 为各自概率(不必和为1,取主要比分即可)。pick=null。pick_label=最可能比分。".to_string(),
-        Play::TTG => "玩法=总进球数。options 覆盖 0,1,2,3,4,5,6,7+(label 如 \"0球\"…\"7+球\"),prob 和≈1。pick=null。pick_label=最可能档。".to_string(),
-        Play::HAFU => "玩法=半全场(半场/全场结果组合)。options 为 9 种组合,label 用 胜/胜、胜/平、胜/负、平/胜、平/平、平/负、负/胜、负/平、负/负,prob 和≈1。pick=null。pick_label=最可能组合。".to_string(),
+        Play::HAD => Some(vec![
+            PlayOption { label: "主胜".into(), odds: m.odds.home },
+            PlayOption { label: "平局".into(), odds: m.odds.draw },
+            PlayOption { label: "客胜".into(), odds: m.odds.away },
+        ]),
+        Play::HHAD => m.hhad_odds.as_ref().map(|o| vec![
+            PlayOption { label: "主胜".into(), odds: o.home },
+            PlayOption { label: "平局".into(), odds: o.draw },
+            PlayOption { label: "客胜".into(), odds: o.away },
+        ]),
+        Play::CRS => m.pm_score.clone(),
+        Play::HT => m.pm_halftime.clone(),
+        Play::TTG | Play::HAFU => None,
     }
 }
 
-fn play_system_prompt(play: Play, line: Option<i32>) -> String {
-    format!("{PLAY_BASE_PROMPT}{}", play_outcome_rule(play, line))
+/// 把 pick_label 映射到 Outcome(仅 HAD/HHAD 适用)。
+fn outcome_from_label(label: &str) -> Option<Outcome> {
+    match label {
+        "主胜" => Some(Outcome::Home),
+        "平局" => Some(Outcome::Draw),
+        "客胜" => Some(Outcome::Away),
+        _ => None,
+    }
 }
 
-fn play_user_prompt(m: &Match, play: Play) -> String {
+/// 把选项集合连同隐含概率(1/odds 归一)拼成提示文本片段。
+fn options_block(opts: &[PlayOption]) -> String {
+    let inv: Vec<f64> = opts.iter().map(|o| if o.odds > 0.0 { 1.0 / o.odds } else { 0.0 }).collect();
+    let sum: f64 = inv.iter().sum();
+    let mut s = String::from("市场可选结果(含隐含概率):");
+    for (o, p) in opts.iter().zip(inv.iter()) {
+        let implied = if sum > 0.0 { p / sum } else { 0.0 };
+        s.push_str(&format!("[{} 赔{:.2} 隐含{:.1}%] ", o.label, o.odds, implied * 100.0));
+    }
+    s
+}
+
+fn play_outcome_rule(play: Play, line: Option<i32>, opts: Option<&[PlayOption]>) -> String {
+    if let Some(opts) = opts {
+        let labels: Vec<&str> = opts.iter().map(|o| o.label.as_str()).collect();
+        let need_pick = matches!(play, Play::HAD | Play::HHAD);
+        let pick_rule = if need_pick {
+            "pick 用 Home/Draw/Away 对应你推荐的项;pick_label 用对应中文(主胜/平局/客胜)。"
+        } else {
+            "pick=null;pick_label 为你推荐的结果(必须是上面给定 label 之一)。"
+        };
+        let line_hint = if play == Play::HHAD {
+            format!("玩法=让球胜平负,让球数={}(主队让/受球)。",
+                line.map(|l| l.to_string()).unwrap_or_else(|| "未知".into()))
+        } else { String::new() };
+        return format!(
+            "{}options 必须严格使用以下给定 label(逐项给出你自己的概率 prob,可不必和为1,因含抽水/其他比分):{}。{}",
+            line_hint, labels.join("、"), pick_rule);
+    }
+    // 自由玩法(体彩 CRS/TTG/HAFU):模型自行构造选项空间。
+    match play {
+        Play::CRS => "玩法=正确比分。给出最可能的 6~8 个比分(label 如 \"2:1\"),prob 为各自概率(不必和为1,取主要比分即可)。pick=null。pick_label=最可能比分。".to_string(),
+        Play::TTG => "玩法=总进球数。options 覆盖 0,1,2,3,4,5,6,7+(label 如 \"0球\"…\"7+球\"),prob 和≈1。pick=null。pick_label=最可能档。".to_string(),
+        Play::HAFU => "玩法=半全场(半场/全场结果组合)。options 为 9 种组合,label 用 胜/胜、胜/平、胜/负、平/胜、平/平、平/负、负/胜、负/平、负/负,prob 和≈1。pick=null。pick_label=最可能组合。".to_string(),
+        Play::HT => "玩法=半场胜平负。options 恰好三项,label 用 半场主胜/半场平局/半场客胜,prob 和≈1。pick=null。pick_label=最可能项。".to_string(),
+        Play::HAD => format!("玩法=胜平负。options 恰好三项,label 用 主胜/平局/客胜,prob 三者之和≈1。pick 用 Home/Draw/Away 对应最高项。"),
+        Play::HHAD => format!("玩法=让球胜平负,让球数={}(主队让/受球)。在该让球盘口下给出 主胜/平局/客胜 三项概率(和≈1),pick 用 Home/Draw/Away。",
+            line.map(|l| l.to_string()).unwrap_or_else(|| "未知".into())),
+    }
+}
+
+fn play_system_prompt(play: Play, line: Option<i32>, opts: Option<&[PlayOption]>) -> String {
+    format!("{PLAY_BASE_PROMPT}{}", play_outcome_rule(play, line, opts))
+}
+
+fn play_user_prompt(m: &Match, play: Play, opts: Option<&[PlayOption]>) -> String {
     let mut s = format!("赛事:{} {} vs {}(开赛 {})。胜平负赔率 主 {} / 平 {} / 客 {}。",
         m.league, m.home, m.away, m.kickoff, m.odds.home, m.odds.draw, m.odds.away);
     if play == Play::HHAD {
@@ -94,13 +154,17 @@ fn play_user_prompt(m: &Match, play: Play) -> String {
             s.push_str(&format!("让球赔率 主 {} / 平 {} / 客 {}。", o.home, o.draw, o.away));
         }
     }
+    if let Some(opts) = opts {
+        s.push_str(&options_block(opts));
+    }
     s.push_str("请按上述玩法给出概率、推荐与中文理由。");
     s
 }
 
 pub fn build_play_body(cfg: &ApiConfig, m: &Match, play: Play) -> Value {
-    let system = play_system_prompt(play, m.hhad_line);
-    let user = play_user_prompt(m, play);
+    let opts = play_options(m, play);
+    let system = play_system_prompt(play, m.hhad_line, opts.as_deref());
+    let user = play_user_prompt(m, play, opts.as_deref());
     match cfg.protocol {
         ApiProtocol::Anthropic => json!({
             "model": cfg.model, "max_tokens": 1024, "system": system,
@@ -136,9 +200,11 @@ fn parse_outcome(s: &str) -> Option<Outcome> {
     }
 }
 
-/// 解析玩法预测(纯函数,无网络)。caller 负责设置 pick_odds。
-pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str)
-    -> Result<PlayPrediction, PredictError>
+/// 解析玩法预测(纯函数,无网络)。
+/// `opts` = 该玩法的市场选项集合(HAD/HHAD/CRS-poly/HT-poly 为 Some,自由玩法为 None)。
+/// 当 opts 为 Some:按 pick_label 在 opts 中查 pick_odds;HAD/HHAD 另由 label 推出 pick。
+pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str,
+    opts: Option<&[PlayOption]>) -> Result<PlayPrediction, PredictError>
 {
     let cleaned = text.trim()
         .trim_start_matches("```json").trim_start_matches("```")
@@ -154,9 +220,24 @@ pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str
             return Err(PredictError::Invalid(format!("prob={} 越界", o.prob)));
         }
     }
-    let pick = raw.pick.as_deref().and_then(parse_outcome);
 
-    // HAD/HHAD 是封闭三选一:严格校验。
+    let pick_label = if raw.pick_label.is_empty() {
+        // 退回:取概率最高项的 label
+        raw.options.iter()
+            .max_by(|a, b| a.prob.partial_cmp(&b.prob).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|o| o.label.clone()).unwrap_or_default()
+    } else {
+        raw.pick_label.clone()
+    };
+
+    // 计算 pick:HAD/HHAD 由 pick_label 推出(回退到 raw.pick);其余为 None。
+    let pick = if matches!(play, Play::HAD | Play::HHAD) {
+        outcome_from_label(&pick_label).or_else(|| raw.pick.as_deref().and_then(parse_outcome))
+    } else {
+        None
+    };
+
+    // HAD/HHAD 是封闭三选一:严格校验。CRS/HT(option-backed)概率不强制和为1。
     if matches!(play, Play::HAD | Play::HHAD) {
         if raw.options.len() != 3 {
             return Err(PredictError::Invalid(format!("胜平负应有 3 项,实得 {}", raw.options.len())));
@@ -170,14 +251,10 @@ pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str
         }
     }
 
-    let pick_label = if raw.pick_label.is_empty() {
-        // 退回:取概率最高项的 label
-        raw.options.iter()
-            .max_by(|a, b| a.prob.partial_cmp(&b.prob).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|o| o.label.clone()).unwrap_or_default()
-    } else {
-        raw.pick_label.clone()
-    };
+    // pick_odds:在 opts 中按 pick_label 精确匹配。
+    let pick_odds = opts.and_then(|os| os.iter()
+        .find(|o| o.label == pick_label)
+        .map(|o| o.odds));
 
     Ok(PlayPrediction {
         play,
@@ -189,26 +266,8 @@ pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str
         rationale: raw.rationale,
         model: model.into(),
         created_at: now_iso(),
-        pick_odds: None,
+        pick_odds,
     })
-}
-
-/// pick 对应的玩法赔率:HAD 取 odds,HHAD 取 hhad_odds,其余 None。
-fn pick_odds_for(m: &Match, play: Play, pick: Option<Outcome>) -> Option<f64> {
-    let o = pick?;
-    match play {
-        Play::HAD => Some(match o {
-            Outcome::Home => m.odds.home,
-            Outcome::Draw => m.odds.draw,
-            Outcome::Away => m.odds.away,
-        }),
-        Play::HHAD => m.hhad_odds.as_ref().map(|h| match o {
-            Outcome::Home => h.home,
-            Outcome::Draw => h.draw,
-            Outcome::Away => h.away,
-        }),
-        _ => None,
-    }
 }
 
 async fn call_ai_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<PlayPrediction, PredictError> {
@@ -234,9 +293,8 @@ async fn call_ai_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<PlayPred
     }
     let v: Value = resp.json().await.map_err(|e| PredictError::Parse(e.to_string()))?;
     let text = extract_text(cfg.protocol, &v)?;
-    let mut p = parse_play_prediction(play, &m.id, &cfg.model, &text)?;
-    p.pick_odds = pick_odds_for(m, play, p.pick);
-    Ok(p)
+    let opts = play_options(m, play);
+    parse_play_prediction(play, &m.id, &cfg.model, &text, opts.as_deref())
 }
 
 /// 玩法预测,失败重试一次。
@@ -250,13 +308,21 @@ pub async fn predict_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<Play
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Match, Odds, Outcome};
+    use crate::domain::{Match, Odds, Outcome, PlayOption};
 
     fn sample() -> Match {
         Match { id: "周日001".into(), league: "世界杯".into(),
             home: "A".into(), away: "B".into(), kickoff: "2026-06-20T19:00:00".into(),
             odds: Odds { home: 2.1, draw: 3.2, away: 3.5 }, handicap: None,
-            hhad_odds: None, hhad_line: None }
+            hhad_odds: None, hhad_line: None, pm_score: None, pm_halftime: None }
+    }
+
+    fn had_opts() -> Vec<PlayOption> {
+        vec![
+            PlayOption { label: "主胜".into(), odds: 2.1 },
+            PlayOption { label: "平局".into(), odds: 3.2 },
+            PlayOption { label: "客胜".into(), odds: 3.5 },
+        ]
     }
 
     #[test]
@@ -295,7 +361,7 @@ mod tests {
     #[test]
     fn parse_play_strips_codefence() {
         let txt = "```json\n{\"options\":[{\"label\":\"主胜\",\"prob\":0.5},{\"label\":\"平局\",\"prob\":0.3},{\"label\":\"客胜\",\"prob\":0.2}],\"pick\":\"Home\",\"pick_label\":\"主胜\",\"confidence\":0.5,\"rationale\":\"x\"}\n```";
-        assert!(parse_play_prediction(Play::HAD, "m", "m", txt).is_ok());
+        assert!(parse_play_prediction(Play::HAD, "m", "m", txt, Some(&had_opts())).is_ok());
     }
 
     #[test]
@@ -303,25 +369,65 @@ mod tests {
         let txt = r#"{"options":[{"label":"主胜","prob":0.52},{"label":"平局","prob":0.27},
             {"label":"客胜","prob":0.21}],"pick":"Home","pick_label":"主胜",
             "confidence":0.52,"rationale":"主队状态好"}"#;
-        let p = parse_play_prediction(Play::HAD, "m1", "mdl", txt).unwrap();
+        let p = parse_play_prediction(Play::HAD, "m1", "mdl", txt, Some(&had_opts())).unwrap();
         assert_eq!(p.play, Play::HAD);
         assert_eq!(p.options.len(), 3);
         assert_eq!(p.pick, Some(Outcome::Home));
         assert_eq!(p.pick_label, "主胜");
-        assert!(p.pick_odds.is_none()); // caller 填充,parse 不填
+        // option-backed:pick_odds 由 pick_label 在 opts 中查得 = 主胜赔率
+        assert_eq!(p.pick_odds, Some(2.1));
+    }
+
+    #[test]
+    fn parse_play_crs_option_backed_pick_odds() {
+        // 模型在给定比分 label 上给出自己的概率,pick_label 命中其中一项 → pick_odds=该项赔率
+        let opts = vec![
+            PlayOption { label: "英格兰 2 - 1 克罗地亚".into(), odds: 9.5 },
+            PlayOption { label: "英格兰 1 - 0 克罗地亚".into(), odds: 7.4 },
+            PlayOption { label: "其他比分".into(), odds: 5.1 },
+        ];
+        let txt = r#"{"options":[{"label":"英格兰 2 - 1 克罗地亚","prob":0.12},
+            {"label":"英格兰 1 - 0 克罗地亚","prob":0.14},{"label":"其他比分","prob":0.20}],
+            "pick":null,"pick_label":"英格兰 1 - 0 克罗地亚","confidence":0.3,"rationale":"低进球预期"}"#;
+        let p = parse_play_prediction(Play::CRS, "m2", "mdl", txt, Some(&opts)).unwrap();
+        assert_eq!(p.play, Play::CRS);
+        assert_eq!(p.options.len(), 3);
+        assert!(p.pick.is_none()); // 比分玩法无 Outcome
+        assert_eq!(p.pick_label, "英格兰 1 - 0 克罗地亚");
+        assert_eq!(p.pick_odds, Some(7.4));
+    }
+
+    #[test]
+    fn parse_play_ht_three_options() {
+        let opts = vec![
+            PlayOption { label: "半场主胜".into(), odds: 2.0 },
+            PlayOption { label: "半场平局".into(), odds: 2.9 },
+            PlayOption { label: "半场客胜".into(), odds: 4.8 },
+        ];
+        let txt = r#"{"options":[{"label":"半场主胜","prob":0.42},{"label":"半场平局","prob":0.40},
+            {"label":"半场客胜","prob":0.18}],"pick":null,"pick_label":"半场平局",
+            "confidence":0.4,"rationale":"半场常平"}"#;
+        let p = parse_play_prediction(Play::HT, "m3", "mdl", txt, Some(&opts)).unwrap();
+        assert_eq!(p.play, Play::HT);
+        assert_eq!(p.options.len(), 3);
+        assert!(p.pick.is_none());
+        assert_eq!(p.pick_label, "半场平局");
+        assert_eq!(p.pick_odds, Some(2.9));
     }
 
     #[test]
     fn parse_play_crs_six_options_pick_null() {
+        // 自由玩法(opts=None):模型自构造比分空间,pick_odds 留空
         let txt = r#"{"options":[{"label":"1:0","prob":0.18},{"label":"2:1","prob":0.16},
             {"label":"1:1","prob":0.14},{"label":"2:0","prob":0.12},{"label":"0:0","prob":0.10},
             {"label":"0:1","prob":0.08}],"pick":null,"pick_label":"1:0",
             "confidence":0.18,"rationale":"低进球预期"}"#;
-        let p = parse_play_prediction(Play::CRS, "m2", "mdl", txt).unwrap();
+        let p = parse_play_prediction(Play::CRS, "m2", "mdl", txt, None).unwrap();
         assert_eq!(p.play, Play::CRS);
         assert_eq!(p.options.len(), 6);
         assert!(p.pick.is_none());
         assert_eq!(p.pick_label, "1:0");
+        assert!(p.pick_odds.is_none());
     }
 
     #[test]
@@ -329,15 +435,16 @@ mod tests {
         let txt = r#"{"options":[{"label":"主胜","prob":0.9},{"label":"平局","prob":0.9},
             {"label":"客胜","prob":0.9}],"pick":"Home","pick_label":"主胜",
             "confidence":0.5,"rationale":"x"}"#;
-        assert!(parse_play_prediction(Play::HAD, "m", "m", txt).is_err());
+        assert!(parse_play_prediction(Play::HAD, "m", "m", txt, Some(&had_opts())).is_err());
     }
 
     #[test]
     fn parse_play_had_rejects_null_pick() {
-        let txt = r#"{"options":[{"label":"主胜","prob":0.4},{"label":"平局","prob":0.3},
-            {"label":"客胜","prob":0.3}],"pick":null,"pick_label":"主胜",
+        // pick=null 且 pick_label 不能映射到 主胜/平局/客胜 → 无法得出 pick → HAD 拒绝
+        let bad = r#"{"options":[{"label":"未知1","prob":0.4},{"label":"未知2","prob":0.3},
+            {"label":"未知3","prob":0.3}],"pick":null,"pick_label":"未知1",
             "confidence":0.4,"rationale":"x"}"#;
-        assert!(parse_play_prediction(Play::HAD, "m", "m", txt).is_err());
+        assert!(parse_play_prediction(Play::HAD, "m", "m", bad, Some(&had_opts())).is_err());
     }
 
     #[test]

@@ -12,6 +12,10 @@ pub struct Odds { pub home: f64, pub draw: f64, pub away: f64 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Probs { pub home: f64, pub draw: f64, pub away: f64 }
 
+/// 可复用的玩法选项:label=中文结果,odds=该结果小数赔率(=1/Yes 价)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayOption { pub label: String, pub odds: f64 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Match {
     pub id: String,
@@ -25,6 +29,10 @@ pub struct Match {
     pub hhad_odds: Option<Odds>,   // 让球胜平负赔率(主/平/客),无则 None
     #[serde(default)]
     pub hhad_line: Option<i32>,    // 让球数,如 -2
+    #[serde(default)]
+    pub pm_score: Option<Vec<PlayOption>>,     // 比分 options (Polymarket)
+    #[serde(default)]
+    pub pm_halftime: Option<Vec<PlayOption>>,  // 半场 options (Polymarket)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +89,8 @@ mod tests {
             handicap: None,
             hhad_odds: None,
             hhad_line: None,
+            pm_score: None,
+            pm_halftime: None,
         };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["odds"]["home"], 2.1);

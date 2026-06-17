@@ -57,7 +57,7 @@ mod tests {
         Match {
             id: "x".into(), league: "世界杯".into(), home: "A".into(), away: "B".into(),
             kickoff: kickoff.into(), odds: Odds { home: 2.0, draw: 3.0, away: 3.5 }, handicap: None,
-            hhad_odds: None, hhad_line: None,
+            hhad_odds: None, hhad_line: None, pm_score: None, pm_halftime: None,
         }
     }
 

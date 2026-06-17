@@ -42,6 +42,8 @@ fn parse_pipe(raw: &str) -> Result<Vec<Match>, SourceError> {
             handicap: f.get(8).and_then(|s| s.parse::<i32>().ok()),
             hhad_odds: None,
             hhad_line: None,
+            pm_score: None,
+            pm_halftime: None,
         });
     }
     if out.is_empty() {

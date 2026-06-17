@@ -65,6 +65,8 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
                     handicap: None,
                     hhad_odds,
                     hhad_line,
+                    pm_score: None,
+                    pm_halftime: None,
                 };
                 keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
             }
