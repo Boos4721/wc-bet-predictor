@@ -35,19 +35,26 @@ async function renderConfig() {
 }
 
 // ---- 赛事区 ----
-$("parse-btn").onclick = async () => {
+function renderMatches() {
+  $("match-list").innerHTML = matches.map((m, i) => `
+    <div class="card">
+      <strong>${esc(m.id)}</strong> ${esc(m.league)} — ${esc(m.home)} vs ${esc(m.away)}
+      <div class="muted">开赛 ${esc(m.kickoff)} · 赔率 ${m.odds.home.toFixed(2)}/${m.odds.draw > 0 ? m.odds.draw.toFixed(2) : "—"}/${m.odds.away.toFixed(2)}</div>
+      <button data-i="${i}" class="predict-btn">预测</button>
+    </div>`).join("");
+  document.querySelectorAll<HTMLButtonElement>(".predict-btn").forEach(b =>
+    b.onclick = () => doPredict(matches[+b.dataset.i!]));
+}
+
+async function loadMatches(loader: () => Promise<Match[]>) {
   try {
-    matches = await api.parseMatches((<HTMLTextAreaElement>$("paste")).value);
-    $("match-list").innerHTML = matches.map((m, i) => `
-      <div class="card">
-        <strong>${esc(m.id)}</strong> ${esc(m.league)} — ${esc(m.home)} vs ${esc(m.away)}
-        <div class="muted">开赛 ${esc(m.kickoff)} · 赔率 ${m.odds.home}/${m.odds.draw}/${m.odds.away}</div>
-        <button data-i="${i}" class="predict-btn">预测</button>
-      </div>`).join("");
-    document.querySelectorAll<HTMLButtonElement>(".predict-btn").forEach(b =>
-      b.onclick = () => doPredict(matches[+b.dataset.i!]));
+    matches = await loader();
+    renderMatches();
   } catch (e: any) { $("match-list").innerHTML = `<p class="loss">${esc(e.message)}</p>`; }
-};
+}
+
+$("parse-btn").onclick = () => loadMatches(() => api.parseMatches((<HTMLTextAreaElement>$("paste")).value));
+$("poly-btn").onclick = () => loadMatches(() => api.polymarketMatches());
 
 // ---- 预测区 ----
 async function doPredict(m: Match) {

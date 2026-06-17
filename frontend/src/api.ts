@@ -23,6 +23,7 @@ async function req<T>(url: string, opts?: RequestInit): Promise<T> {
 
 export const api = {
   parseMatches: (raw: string) => req<Match[]>("/api/matches", { method: "POST", body: JSON.stringify({ raw }) }),
+  polymarketMatches: () => req<Match[]>("/api/matches/polymarket"),
   predict: (m: Match) => req<Prediction>("/api/predict", { method: "POST", body: JSON.stringify(m) }),
   placeBet: (b: { match_id: string; pick: Outcome; stake: number; odds: number }) =>
     req<{ id: number }>("/api/bets", { method: "POST", body: JSON.stringify(b) }),

@@ -1,5 +1,6 @@
 mod domain;
 mod source;
+mod polymarket;
 mod ledger;
 mod predictor;
 mod config;

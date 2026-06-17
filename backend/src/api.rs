@@ -2,6 +2,7 @@ use crate::config;
 use crate::domain::{Match, Outcome};
 use crate::ledger::Store;
 use crate::predictor::{self, ApiConfig};
+use crate::polymarket;
 use crate::source::{MatchSource, PasteSource};
 use axum::{extract::{Query, State}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde::Deserialize;
@@ -18,6 +19,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/matches", post(parse_matches))
+        .route("/api/matches/polymarket", get(polymarket_matches))
         .route("/api/predict", post(predict))
         .route("/api/bets", get(list_bets).post(place_bet))
         .route("/api/settle", post(settle))
@@ -37,6 +39,13 @@ async fn parse_matches(Json(b): Json<RawIn>) -> impl IntoResponse {
     match (PasteSource { raw: b.raw }).load() {
         Ok(ms) => (StatusCode::OK, Json(json!(ms))).into_response(),
         Err(e) => err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn polymarket_matches() -> impl IntoResponse {
+    match polymarket::fetch_matches().await {
+        Ok(ms) => (StatusCode::OK, Json(json!(ms))).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e).into_response(),
     }
 }
 
