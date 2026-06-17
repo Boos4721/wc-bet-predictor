@@ -1,4 +1,5 @@
-use crate::domain::{Match, Outcome, PlayOption};
+use crate::domain::{Bet, BetStatus, Match, Outcome, PlayOption};
+use crate::ledger::Stats;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -272,12 +273,25 @@ pub fn parse_play_prediction(play: Play, match_id: &str, model: &str, text: &str
 
 async fn call_ai_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<PlayPrediction, PredictError> {
     let body = build_play_body(cfg, m, play);
-    let client = reqwest::Client::new();
-    let url = match cfg.protocol {
+    let v = post_ai(cfg, &body).await?;
+    let text = extract_text(cfg.protocol, &v)?;
+    let opts = play_options(m, play);
+    parse_play_prediction(play, &m.id, &cfg.model, &text, opts.as_deref())
+}
+
+/// AI 接口的 URL(按协议)。
+fn ai_url(cfg: &ApiConfig) -> String {
+    match cfg.protocol {
         ApiProtocol::Anthropic => format!("{}/v1/messages", cfg.base_url.trim_end_matches('/')),
         ApiProtocol::OpenAI => format!("{}/chat/completions", cfg.base_url.trim_end_matches('/')),
-    };
-    let mut req = client.post(&url).json(&body);
+    }
+}
+
+/// POST 一个请求体到 AI 接口,返回原始 JSON 响应(供对话/玩法/工具循环共用)。
+pub async fn post_ai(cfg: &ApiConfig, body: &Value) -> Result<Value, PredictError> {
+    let client = reqwest::Client::new();
+    let url = ai_url(cfg);
+    let mut req = client.post(&url).json(body);
     req = match cfg.protocol {
         ApiProtocol::Anthropic => req
             .header("x-api-key", &cfg.api_key)
@@ -291,10 +305,7 @@ async fn call_ai_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<PlayPred
         let txt = resp.text().await.unwrap_or_default();
         return Err(PredictError::Http(format!("{code}: {txt}")));
     }
-    let v: Value = resp.json().await.map_err(|e| PredictError::Parse(e.to_string()))?;
-    let text = extract_text(cfg.protocol, &v)?;
-    let opts = play_options(m, play);
-    parse_play_prediction(play, &m.id, &cfg.model, &text, opts.as_deref())
+    resp.json().await.map_err(|e| PredictError::Parse(e.to_string()))
 }
 
 /// 玩法预测,失败重试一次。
@@ -310,56 +321,6 @@ pub async fn predict_play(cfg: &ApiConfig, m: &Match, play: Play) -> Result<Play
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct ChatMsg { pub role: String, pub content: String }
 
-/// 构造对话请求体(纯函数,便于测试)。system 为系统提示,msgs 为对话历史。
-pub fn build_chat_body(cfg: &ApiConfig, system: &str, msgs: &[ChatMsg]) -> Value {
-    let arr: Vec<Value> = msgs.iter()
-        .map(|m| json!({"role": if m.role == "assistant" { "assistant" } else { "user" }, "content": m.content}))
-        .collect();
-    match cfg.protocol {
-        ApiProtocol::Anthropic => json!({
-            "model": cfg.model, "max_tokens": 1024, "system": system, "messages": arr
-        }),
-        ApiProtocol::OpenAI => {
-            let mut full = vec![json!({"role":"system","content": system})];
-            full.extend(arr);
-            json!({"model": cfg.model, "messages": full})
-        }
-    }
-}
-
-async fn call_chat(cfg: &ApiConfig, system: &str, msgs: &[ChatMsg]) -> Result<String, PredictError> {
-    let body = build_chat_body(cfg, system, msgs);
-    let client = reqwest::Client::new();
-    let url = match cfg.protocol {
-        ApiProtocol::Anthropic => format!("{}/v1/messages", cfg.base_url.trim_end_matches('/')),
-        ApiProtocol::OpenAI => format!("{}/chat/completions", cfg.base_url.trim_end_matches('/')),
-    };
-    let mut req = client.post(&url).json(&body);
-    req = match cfg.protocol {
-        ApiProtocol::Anthropic => req
-            .header("x-api-key", &cfg.api_key)
-            .header("anthropic-version", "2023-06-01"),
-        ApiProtocol::OpenAI => req
-            .header("authorization", format!("Bearer {}", cfg.api_key)),
-    };
-    let resp = req.send().await.map_err(|e| PredictError::Http(e.to_string()))?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let txt = resp.text().await.unwrap_or_default();
-        return Err(PredictError::Http(format!("{code}: {txt}")));
-    }
-    let v: Value = resp.json().await.map_err(|e| PredictError::Parse(e.to_string()))?;
-    extract_text(cfg.protocol, &v)
-}
-
-/// 对话(失败重试一次)。
-pub async fn chat(cfg: &ApiConfig, system: &str, msgs: &[ChatMsg]) -> Result<String, PredictError> {
-    match call_chat(cfg, system, msgs).await {
-        Ok(t) => Ok(t),
-        Err(_) => call_chat(cfg, system, msgs).await,
-    }
-}
-
 /// 把赛事列表压缩成上下文文本(供 system 提示注入)。
 pub fn matches_context(ms: &[Match]) -> String {
     if ms.is_empty() { return "当前没有加载任何赛事。".into(); }
@@ -369,6 +330,176 @@ pub fn matches_context(ms: &[Match]) -> String {
             m.id, m.home, m.away, m.kickoff, m.odds.home, m.odds.draw, m.odds.away));
     }
     s
+}
+
+fn outcome_zh(o: Outcome) -> &'static str {
+    match o { Outcome::Home => "主胜", Outcome::Draw => "平局", Outcome::Away => "客胜" }
+}
+
+fn status_zh(s: BetStatus) -> &'static str {
+    match s { BetStatus::Pending => "待结算", BetStatus::Won => "命中", BetStatus::Lost => "未中" }
+}
+
+/// 把账本战绩与近期注单压缩成上下文文本(纯函数,供 system 提示注入)。
+pub fn ledger_context(stats: &Stats, bets: &[Bet]) -> String {
+    let mut s = format!(
+        "账本战绩:已结算 {} 笔,命中率 {:.0}%,累计盈亏 {:.0},ROI {:.0}%。",
+        stats.settled, stats.hit_rate * 100.0, stats.total_pnl, stats.roi * 100.0);
+    if bets.is_empty() {
+        s.push_str("近期注单:暂无。");
+    } else {
+        s.push_str("近期注单:");
+        for b in bets.iter().take(10) {
+            s.push_str(&format!("{} {} @{} {}元 [{}];",
+                b.match_id, outcome_zh(b.pick), b.odds_at_bet, b.stake, status_zh(b.status)));
+        }
+    }
+    s
+}
+
+// ===== 只读工具(function calling)agentic 循环 =====
+
+/// 解析后的工具调用。
+#[derive(Debug, Clone)]
+pub struct ToolCall { pub id: String, pub name: String, pub args: Value }
+
+/// 5 个只读工具的统一定义:名称、描述、JSON-Schema 参数(单一事实来源)。
+fn tool_defs() -> Vec<(&'static str, &'static str, Value)> {
+    let source_enum = json!({"type":"string","enum":["sporttery","polymarket"],"description":"数据源"});
+    let play_enum = json!({"type":"string","enum":["HAD","HHAD","CRS","TTG","HAFU","HT"],
+        "description":"玩法,默认 HAD(胜平负)"});
+    vec![
+        ("list_dates", "列出某数据源可用的比赛日及每日场次数",
+            json!({"type":"object",
+                "properties":{"source":source_enum},
+                "required":["source"]})),
+        ("get_matches", "获取某数据源(可按日期过滤)的赛事列表,含 id、队伍、开赛、赔率",
+            json!({"type":"object",
+                "properties":{"source":source_enum,"date":{"type":"string","description":"开赛日期,可选"}},
+                "required":["source"]})),
+        ("predict", "对某场比赛运行一个玩法的预测,返回推荐与各项概率",
+            json!({"type":"object",
+                "properties":{"source":source_enum,"match_id":{"type":"string","description":"赛事 id"},"play":play_enum},
+                "required":["source","match_id"]})),
+        ("get_stats", "查询账本战绩统计(已结算笔数、命中率、累计盈亏、ROI)",
+            json!({"type":"object","properties":{}})),
+        ("list_bets", "列出近期注单记录",
+            json!({"type":"object","properties":{}})),
+    ]
+}
+
+/// 工具规格数组(按协议包装)。Anthropic 与 OpenAI 名称/参数一致,仅外层结构不同。
+pub fn tool_specs(p: ApiProtocol) -> Value {
+    let defs = tool_defs();
+    let arr: Vec<Value> = defs.into_iter().map(|(name, desc, schema)| match p {
+        ApiProtocol::Anthropic => json!({
+            "name": name, "description": desc, "input_schema": schema
+        }),
+        ApiProtocol::OpenAI => json!({
+            "type": "function",
+            "function": {"name": name, "description": desc, "parameters": schema}
+        }),
+    }).collect();
+    Value::Array(arr)
+}
+
+/// 构造带工具的对话请求体。`msgs_json` 为已按协议成形的运行中消息数组。
+pub fn build_agent_body(cfg: &ApiConfig, system: &str, msgs_json: &Value) -> Value {
+    let tools = tool_specs(cfg.protocol);
+    match cfg.protocol {
+        ApiProtocol::Anthropic => json!({
+            "model": cfg.model, "max_tokens": 1024, "system": system,
+            "messages": msgs_json, "tools": tools, "tool_choice": {"type": "auto"}
+        }),
+        ApiProtocol::OpenAI => {
+            let mut full = vec![json!({"role":"system","content": system})];
+            if let Some(arr) = msgs_json.as_array() { full.extend(arr.iter().cloned()); }
+            json!({"model": cfg.model, "messages": full, "tools": tools, "tool_choice": "auto"})
+        }
+    }
+}
+
+/// 构造不带工具的对话请求体(用于步数耗尽后强制出文本)。
+pub fn build_agent_body_no_tools(cfg: &ApiConfig, system: &str, msgs_json: &Value) -> Value {
+    match cfg.protocol {
+        ApiProtocol::Anthropic => json!({
+            "model": cfg.model, "max_tokens": 1024, "system": system, "messages": msgs_json
+        }),
+        ApiProtocol::OpenAI => {
+            let mut full = vec![json!({"role":"system","content": system})];
+            if let Some(arr) = msgs_json.as_array() { full.extend(arr.iter().cloned()); }
+            json!({"model": cfg.model, "messages": full})
+        }
+    }
+}
+
+/// 从响应中解析工具调用;仅有文本时返回空 vec(循环结束)。
+pub fn parse_tool_calls(p: ApiProtocol, resp: &Value) -> Vec<ToolCall> {
+    match p {
+        ApiProtocol::Anthropic => resp["content"].as_array().map(|items| {
+            items.iter().filter(|it| it["type"] == "tool_use").map(|it| ToolCall {
+                id: it["id"].as_str().unwrap_or_default().to_string(),
+                name: it["name"].as_str().unwrap_or_default().to_string(),
+                args: it["input"].clone(),
+            }).collect()
+        }).unwrap_or_default(),
+        ApiProtocol::OpenAI => resp["choices"][0]["message"]["tool_calls"].as_array().map(|items| {
+            items.iter().map(|it| ToolCall {
+                id: it["id"].as_str().unwrap_or_default().to_string(),
+                name: it["function"]["name"].as_str().unwrap_or_default().to_string(),
+                args: it["function"]["arguments"].as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .unwrap_or_else(|| json!({})),
+            }).collect()
+        }).unwrap_or_default(),
+    }
+}
+
+/// 提取最终文本;无文本(仅工具调用)时返回 ""。
+pub fn final_text(p: ApiProtocol, resp: &Value) -> String {
+    match p {
+        ApiProtocol::Anthropic => resp["content"].as_array()
+            .map(|items| items.iter()
+                .filter_map(|it| if it["type"] == "text" { it["text"].as_str() } else { None })
+                .collect::<Vec<_>>().join(""))
+            .unwrap_or_default(),
+        ApiProtocol::OpenAI => resp["choices"][0]["message"]["content"].as_str()
+            .unwrap_or_default().to_string(),
+    }
+}
+
+/// 助手轮(把模型上一次响应原样回填进消息数组)。
+pub fn assistant_turn(p: ApiProtocol, resp: &Value) -> Value {
+    match p {
+        ApiProtocol::Anthropic => json!({"role":"assistant","content": resp["content"].clone()}),
+        ApiProtocol::OpenAI => resp["choices"][0]["message"].clone(),
+    }
+}
+
+/// 单个工具结果轮。Anthropic 用 user 轮包 tool_result;OpenAI 用 role=tool。
+pub fn tool_result_turn(p: ApiProtocol, call_id: &str, content: &str) -> Value {
+    match p {
+        ApiProtocol::Anthropic => json!({"role":"user","content":[
+            {"type":"tool_result","tool_use_id": call_id,"content": content}
+        ]}),
+        ApiProtocol::OpenAI => json!({"role":"tool","tool_call_id": call_id,"content": content}),
+    }
+}
+
+/// 把 ChatMsg 列表映射成协议中立的消息数组(role 仅 user/assistant)。
+pub fn seed_messages(msgs: &[ChatMsg]) -> Value {
+    Value::Array(msgs.iter().map(|m| json!({
+        "role": if m.role == "assistant" { "assistant" } else { "user" },
+        "content": m.content
+    })).collect())
+}
+
+/// 把工具名解析为 Play(默认 HAD)。
+pub fn play_from_str(s: &str) -> Play {
+    match s {
+        "HHAD" => Play::HHAD, "CRS" => Play::CRS, "TTG" => Play::TTG,
+        "HAFU" => Play::HAFU, "HT" => Play::HT, _ => Play::HAD,
+    }
 }
 
 #[cfg(test)]
@@ -520,30 +651,6 @@ mod tests {
 
     #[test]
     fn chat_body_and_context() {
-        let msgs = vec![
-            ChatMsg { role: "user".into(), content: "你好".into() },
-            ChatMsg { role: "assistant".into(), content: "在".into() },
-            ChatMsg { role: "user".into(), content: "分析下".into() },
-        ];
-
-        // Anthropic:system 为顶层字符串,messages 为对话数组
-        let acfg = ApiConfig { base_url: "https://x".into(), api_key: "k".into(),
-            model: "claude-fable-5".into(), protocol: ApiProtocol::Anthropic };
-        let ab = build_chat_body(&acfg, "系统提示", &msgs);
-        assert_eq!(ab["system"], "系统提示");
-        assert_eq!(ab["messages"][0]["role"], "user");
-        assert_eq!(ab["messages"][1]["role"], "assistant");
-        assert_eq!(ab["messages"][2]["content"], "分析下");
-
-        // OpenAI:system 作为首条 system-role 消息插入
-        let ocfg = ApiConfig { base_url: "https://x".into(), api_key: "k".into(),
-            model: "gpt-4o".into(), protocol: ApiProtocol::OpenAI };
-        let ob = build_chat_body(&ocfg, "系统提示", &msgs);
-        assert!(ob["system"].is_null());
-        assert_eq!(ob["messages"][0]["role"], "system");
-        assert_eq!(ob["messages"][0]["content"], "系统提示");
-        assert_eq!(ob["messages"][1]["role"], "user");
-
         // matches_context:空返回提示串;非空含队名
         assert_eq!(matches_context(&[]), "当前没有加载任何赛事。");
         let ctx = matches_context(&[sample()]);
@@ -563,5 +670,138 @@ mod tests {
         assert!(user.contains("让球赔率"));
         let sys = b["system"].as_str().unwrap();
         assert!(sys.contains("让球数=-2"));
+    }
+
+    use crate::domain::{Bet, BetStatus};
+    use crate::ledger::Stats;
+
+    fn acfg() -> ApiConfig {
+        ApiConfig { base_url: "https://x".into(), api_key: "k".into(),
+            model: "m".into(), protocol: ApiProtocol::Anthropic }
+    }
+    fn ocfg() -> ApiConfig {
+        ApiConfig { base_url: "https://x".into(), api_key: "k".into(),
+            model: "m".into(), protocol: ApiProtocol::OpenAI }
+    }
+
+    #[test]
+    fn ledger_context_formats_stats_and_bets() {
+        let stats = Stats { settled: 5, hit_rate: 0.6, total_pnl: 120.0, roi: 0.24 };
+        let bets = vec![Bet { id: 1, match_id: "周三021".into(), pick: Outcome::Home,
+            stake: 100.0, odds_at_bet: 1.8, status: BetStatus::Won,
+            created_at: "@1".into() }];
+        let s = ledger_context(&stats, &bets);
+        assert!(s.contains("已结算 5 笔"));
+        assert!(s.contains("命中率 60%"));
+        assert!(s.contains("周三021 主胜 @1.8 100元 [命中]"));
+    }
+
+    #[test]
+    fn ledger_context_empty_bets() {
+        let stats = Stats { settled: 0, hit_rate: 0.0, total_pnl: 0.0, roi: 0.0 };
+        assert!(ledger_context(&stats, &[]).contains("近期注单:暂无"));
+    }
+
+    #[test]
+    fn tool_specs_anthropic_has_five_tools() {
+        let v = tool_specs(ApiProtocol::Anthropic);
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr[0]["name"], "list_dates");
+        assert!(arr[0]["input_schema"].is_object());
+        let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for n in ["list_dates","get_matches","predict","get_stats","list_bets"] {
+            assert!(names.contains(&n), "missing {n}");
+        }
+    }
+
+    #[test]
+    fn tool_specs_openai_has_five_function_tools() {
+        let v = tool_specs(ApiProtocol::OpenAI);
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr[0]["type"], "function");
+        assert_eq!(arr[0]["function"]["name"], "list_dates");
+        assert!(arr[0]["function"]["parameters"].is_object());
+    }
+
+    #[test]
+    fn build_agent_body_includes_tools() {
+        let msgs = seed_messages(&[ChatMsg { role: "user".into(), content: "hi".into() }]);
+        let ab = build_agent_body(&acfg(), "sys", &msgs);
+        assert!(ab["tools"].is_array());
+        assert_eq!(ab["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(ab["tool_choice"]["type"], "auto");
+        assert_eq!(ab["system"], "sys");
+
+        let ob = build_agent_body(&ocfg(), "sys", &msgs);
+        assert!(ob["tools"].is_array());
+        assert_eq!(ob["tool_choice"], "auto");
+        assert_eq!(ob["messages"][0]["role"], "system");
+    }
+
+    #[test]
+    fn build_agent_body_no_tools_omits_tools() {
+        let msgs = seed_messages(&[ChatMsg { role: "user".into(), content: "hi".into() }]);
+        let ab = build_agent_body_no_tools(&acfg(), "sys", &msgs);
+        assert!(ab["tools"].is_null());
+    }
+
+    #[test]
+    fn parse_tool_calls_anthropic() {
+        let resp = json!({"content":[
+            {"type":"text","text":"让我查一下"},
+            {"type":"tool_use","id":"tu_1","name":"get_matches","input":{"source":"sporttery"}}
+        ]});
+        let calls = parse_tool_calls(ApiProtocol::Anthropic, &resp);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "tu_1");
+        assert_eq!(calls[0].name, "get_matches");
+        assert_eq!(calls[0].args["source"], "sporttery");
+        // 纯文本响应 → 无工具调用
+        let text_only = json!({"content":[{"type":"text","text":"答案"}]});
+        assert!(parse_tool_calls(ApiProtocol::Anthropic, &text_only).is_empty());
+    }
+
+    #[test]
+    fn parse_tool_calls_openai() {
+        let resp = json!({"choices":[{"message":{"content":null,"tool_calls":[
+            {"id":"call_1","type":"function","function":{"name":"predict","arguments":"{\"source\":\"sporttery\",\"match_id\":\"周三021\"}"}}
+        ]}}]});
+        let calls = parse_tool_calls(ApiProtocol::OpenAI, &resp);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "predict");
+        assert_eq!(calls[0].args["match_id"], "周三021");
+        let text_only = json!({"choices":[{"message":{"content":"答案"}}]});
+        assert!(parse_tool_calls(ApiProtocol::OpenAI, &text_only).is_empty());
+    }
+
+    #[test]
+    fn final_text_tolerates_tool_only() {
+        let tool_only = json!({"content":[{"type":"tool_use","id":"x","name":"get_stats","input":{}}]});
+        assert_eq!(final_text(ApiProtocol::Anthropic, &tool_only), "");
+        let with_text = json!({"content":[{"type":"text","text":"结论"}]});
+        assert_eq!(final_text(ApiProtocol::Anthropic, &with_text), "结论");
+    }
+
+    #[test]
+    fn turn_builders_shape() {
+        // Anthropic 工具结果 = user 轮 + tool_result
+        let ar = tool_result_turn(ApiProtocol::Anthropic, "tu_1", "data");
+        assert_eq!(ar["role"], "user");
+        assert_eq!(ar["content"][0]["type"], "tool_result");
+        assert_eq!(ar["content"][0]["tool_use_id"], "tu_1");
+        // OpenAI 工具结果 = role=tool
+        let or = tool_result_turn(ApiProtocol::OpenAI, "call_1", "data");
+        assert_eq!(or["role"], "tool");
+        assert_eq!(or["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn play_from_str_defaults_had() {
+        assert_eq!(play_from_str("HHAD"), Play::HHAD);
+        assert_eq!(play_from_str("xyz"), Play::HAD);
+        assert_eq!(play_from_str("CRS"), Play::CRS);
     }
 }

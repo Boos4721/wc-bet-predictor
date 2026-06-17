@@ -124,13 +124,117 @@ async fn chat(State(s): State<AppState>, Json(b): Json<ChatIn>) -> impl IntoResp
     if b.messages.is_empty() {
         return err(StatusCode::BAD_REQUEST, "消息为空").into_response();
     }
-    let ctx = crate::predictor::matches_context(&b.matches);
-    let system = format!(
-        "你是足球竞彩分析助手,用简洁中文回答。可基于赔率给出分析与建议,但要提醒用户理性、量力而行,不承诺胜率。\n{ctx}");
-    match crate::predictor::chat(&cfg, &system, &b.messages).await {
-        Ok(reply) => (StatusCode::OK, Json(json!({"reply": reply}))).into_response(),
+
+    // 系统提示:充实人设 + 注入赛事上下文 + 账本上下文。
+    let stats = s.store.stats().unwrap_or(crate::ledger::Stats {
+        settled: 0, hit_rate: 0.0, total_pnl: 0.0, roi: 0.0 });
+    let bets = s.store.list_bets(None).unwrap_or_default();
+    let ledger_ctx = crate::predictor::ledger_context(&stats, &bets);
+    let matches_ctx = crate::predictor::matches_context(&b.matches);
+    let system = format!("{PERSONA}\n{matches_ctx}\n{ledger_ctx}");
+
+    match run_agent(&s, &cfg, &system, &b.messages).await {
+        Ok((reply, steps)) => (StatusCode::OK, Json(json!({"reply": reply, "steps": steps}))).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
+}
+
+const PERSONA: &str = "你是「世界鸡预测」的足球竞彩分析助手。\n\
+职责:基于赔率、隐含概率与已加载赛事,为用户分析赛事、解释玩法、给出有依据的倾向性建议。\n\
+可用玩法:胜平负、让球胜平负、比分、总进球数、半全场、半场。\n\
+风格:简洁中文,先结论后理由,涉及金额时务必提醒「均为虚拟、仅供复盘,请理性、量力而行」,绝不承诺胜率或保证盈利。\n\
+当你需要数据(某天的赛事、某场的预测、账本战绩)时,调用提供的工具获取,不要编造赔率或比分。";
+
+const MAX_STEPS: usize = 6;
+
+/// 选择数据源缓存(默认 sporttery)。
+fn pick_cache(s: &AppState, source: &str) -> std::sync::Arc<crate::cache::MatchCache> {
+    if source == "polymarket" { s.poly.clone() } else { s.sporttery.clone() }
+}
+
+/// 执行一次工具调用,返回 (结果字符串, 步骤摘要)。
+async fn exec_tool(s: &AppState, cfg: &ApiConfig, name: &str, args: &serde_json::Value) -> (String, String) {
+    let source = args["source"].as_str().unwrap_or("sporttery");
+    match name {
+        "list_dates" => {
+            let snap = pick_cache(s, source).snapshot();
+            let dates = crate::cache::available_dates(&snap);
+            let summary = format!("list_dates {source} → {} 个比赛日", dates.len());
+            (json!(dates).to_string(), summary)
+        }
+        "get_matches" => {
+            let mut snap = pick_cache(s, source).snapshot();
+            if let Some(d) = args["date"].as_str() { snap.retain(|m| m.kickoff == d); }
+            snap.truncate(40);
+            let mini: Vec<serde_json::Value> = snap.iter().map(|m| json!({
+                "id": m.id, "home": m.home, "away": m.away, "kickoff": m.kickoff,
+                "odds": {"home": m.odds.home, "draw": m.odds.draw, "away": m.odds.away}
+            })).collect();
+            let summary = format!("get_matches {source} → {} 场", mini.len());
+            (json!(mini).to_string(), summary)
+        }
+        "predict" => {
+            let match_id = args["match_id"].as_str().unwrap_or_default();
+            let play = crate::predictor::play_from_str(args["play"].as_str().unwrap_or("HAD"));
+            let snap = pick_cache(s, source).snapshot();
+            let Some(m) = snap.iter().find(|m| m.id == match_id) else {
+                return ("未找到该赛事".into(), format!("predict {match_id} → 未找到"));
+            };
+            match crate::predictor::predict_play(cfg, m, play).await {
+                Ok(p) => {
+                    let summary = format!("predict {} → {} {:.0}%",
+                        match_id, p.pick_label, (p.confidence as f64) * 100.0);
+                    (json!(p).to_string(), summary)
+                }
+                Err(e) => (e.to_string(), format!("predict {match_id} → 失败")),
+            }
+        }
+        "get_stats" => {
+            let st = s.store.stats().unwrap_or(crate::ledger::Stats {
+                settled: 0, hit_rate: 0.0, total_pnl: 0.0, roi: 0.0 });
+            (json!(st).to_string(), "get_stats → 战绩".into())
+        }
+        "list_bets" => {
+            let mut bets = s.store.list_bets(None).unwrap_or_default();
+            bets.truncate(20);
+            (json!(bets).to_string(), format!("list_bets → {} 笔", bets.len()))
+        }
+        other => (format!("未知工具:{other}"), format!("{other} → 未知")),
+    }
+}
+
+/// 只读工具 agentic 循环。返回最终回复文本与步骤摘要。
+async fn run_agent(s: &AppState, cfg: &ApiConfig, system: &str, msgs: &[crate::predictor::ChatMsg])
+    -> Result<(String, Vec<serde_json::Value>), crate::predictor::PredictError>
+{
+    use crate::predictor as p;
+    let mut convo = p::seed_messages(msgs);
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+
+    for _ in 0..MAX_STEPS {
+        let body = p::build_agent_body(cfg, system, &convo);
+        let resp = p::post_ai(cfg, &body).await?;
+        let calls = p::parse_tool_calls(cfg.protocol, &resp);
+        if calls.is_empty() {
+            return Ok((p::final_text(cfg.protocol, &resp), steps));
+        }
+        // 回填助手轮(含 tool_use/tool_calls)。
+        push(&mut convo, p::assistant_turn(cfg.protocol, &resp));
+        for c in &calls {
+            let (result, summary) = exec_tool(s, cfg, &c.name, &c.args).await;
+            steps.push(json!({"tool": c.name, "summary": summary}));
+            push(&mut convo, p::tool_result_turn(cfg.protocol, &c.id, &result));
+        }
+    }
+
+    // 步数耗尽:不带工具再问一次,强制出文本。
+    let body = p::build_agent_body_no_tools(cfg, system, &convo);
+    let resp = p::post_ai(cfg, &body).await?;
+    Ok((p::final_text(cfg.protocol, &resp), steps))
+}
+
+fn push(convo: &mut serde_json::Value, turn: serde_json::Value) {
+    if let Some(arr) = convo.as_array_mut() { arr.push(turn); }
 }
 
 #[derive(Deserialize)]
