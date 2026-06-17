@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>竞彩预测 · 模拟账本</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  /* Light theme — flat paper surfaces, Signal Teal accent preserved */
+  --abyss: #EEF1F5;       /* page background */
+  --slate: #FFFFFF;       /* elevated panels */
+  --raised: #E5E9EF;      /* input wells, hover rows */
+  --hairline: rgba(15,23,42,0.10);
+  --hairline-strong: rgba(15,23,42,0.18);
+  --ink: #16181C;         /* primary text */
+  --steel: #5B6675;       /* secondary text — AA on white */
+  --teal: #3DA890;        /* accent fills, borders, focus */
+  --teal-text: #1F6B57;   /* teal as small text — 6:1 on white */
+  --on-teal: #0B1512;     /* text on teal fills */
+  --teal-dim: rgba(47,140,119,0.12);
+  --profit: #15824F;      /* money green — 4.8:1 on white */
+  --deficit: #C2392F;     /* money red — 5.4:1 on white */
+  --draw: #5A6473;
+  --radius: 12px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  background: var(--abyss);
+  color: var(--ink);
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.mono { font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-feature-settings: "tnum"; }
+.num { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+::selection { background: var(--teal-dim); }
+::placeholder { color: var(--steel); opacity: 0.6; }
+
+/* ---- Shell ---- */
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 28px 80px; }
+.topbar {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; padding: 26px 0 18px; border-bottom: 1px solid var(--hairline);
+  flex-wrap: wrap;
+}
+.brand { display: flex; align-items: baseline; gap: 12px; }
+.brand h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.brand .tag { font-size: 11px; color: var(--steel); letter-spacing: 0.14em; text-transform: uppercase; }
+.brand .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); align-self: center; }
+.clock { font-size: 12px; color: var(--steel); letter-spacing: 0.04em; }
+
+/* reminder banner — virtual money, always present */
+.reminder {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 16px; padding: 9px 14px;
+  border: 1px solid var(--hairline); border-radius: 8px;
+  background: var(--slate); color: var(--steel); font-size: 12px;
+}
+.reminder .mk { width: 14px; height: 14px; flex-shrink: 0; color: var(--draw); }
+
+/* ---- Two-zone grid ---- */
+.shell { display: grid; grid-template-columns: 360px 1fr; gap: 28px; margin-top: 24px; align-items: start; }
+.rail { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 20px; }
+.col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+
+/* ---- Panel ---- */
+.panel { background: var(--slate); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 24px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-head h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.panel-head .meta { font-size: 11px; color: var(--steel); letter-spacing: 0.1em; text-transform: uppercase; }
+
+/* ---- Inputs ---- */
+.field { margin-bottom: 14px; }
+.field:last-child { margin-bottom: 0; }
+.field label { display: block; font-size: 11px; color: var(--steel); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+.field .hint { color: var(--teal-text); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.well, textarea.well, select.well {
+  width: 100%; background: var(--raised); border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 10px 12px; color: var(--ink);
+  font-family: inherit; font-size: 13px; transition: border-color 0.18s var(--ease);
+  outline: none;
+}
+input.well, select.well { height: 40px; }
+.well:focus, textarea.well:focus, select.well:focus { border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-dim); }
+textarea.well { resize: vertical; min-height: 92px; line-height: 1.6; }
+.err { color: var(--deficit); font-size: 12px; margin-top: 6px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* ---- Buttons ---- */
+.btn {
+  font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  border-radius: 8px; padding: 11px 18px; border: 1px solid transparent;
+  transition: transform 0.06s var(--ease), background 0.18s var(--ease), border-color 0.18s var(--ease);
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--teal); color: var(--on-teal); font-weight: 600; width: 100%; }
+.btn-primary:hover { background: #46bca1; }
+.btn-primary:disabled { background: var(--raised); color: var(--steel); cursor: default; }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--hairline); }
+.btn-ghost:hover { border-color: var(--hairline-strong); background: var(--raised); }
+.btn-sm { padding: 7px 12px; font-size: 12px; }
+
+/* ---- Match list (divider-ruled, not stacked cards) ---- */
+.matches { display: flex; flex-direction: column; }
+.match-row {
+  display: grid; grid-template-columns: 64px 1fr auto; gap: 14px; align-items: center;
+  padding: 14px 14px; border-top: 1px solid var(--hairline); cursor: pointer;
+  border-left: 1px solid transparent; transition: background 0.16s var(--ease);
+}
+.match-row:first-child { border-top: none; }
+.match-row:hover { background: var(--raised); }
+.match-row.active { background: var(--raised); border-left: 1px solid var(--teal); border-radius: 0 8px 8px 0; }
+.match-row .mid { font-size: 12px; color: var(--steel); }
+.match-row .teams { font-size: 14px; font-weight: 500; }
+.match-row .teams .vs { color: var(--steel); font-weight: 400; margin: 0 6px; }
+.match-row .league { font-size: 11px; color: var(--steel); margin-top: 2px; }
+.match-row .odds { display: flex; gap: 10px; font-size: 13px; }
+.match-row .odds span { color: var(--steel); }
+.match-row .odds b { color: var(--ink); font-weight: 500; }
+
+/* ---- Prediction card ---- */
+.pred-empty, .pred-card { min-height: 220px; }
+.pred-empty { display: flex; align-items: center; justify-content: center; text-align: center; color: var(--steel); padding: 32px; }
+.pred-empty p { max-width: 40ch; line-height: 1.7; }
+.pred-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.pred-title .t { font-size: 16px; font-weight: 600; }
+.pred-title .id { font-size: 12px; color: var(--steel); }
+.pred-league { font-size: 12px; color: var(--steel); margin-bottom: 18px; }
+
+/* probability bar */
+.prob-wrap { margin: 18px 0 20px; }
+.prob-bar { display: flex; height: 40px; border-radius: 6px; overflow: hidden; background: var(--raised); }
+.prob-seg { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--on-teal); font-weight: 600; min-width: 0; transition: flex-grow 0.5s var(--ease); overflow: hidden; white-space: nowrap; }
+.prob-seg.pick { background: var(--teal); }
+.prob-seg.rest { background: #CDD5DF; color: var(--steel); }
+.prob-seg .lab { opacity: 0.85; font-weight: 500; }
+.prob-legend { display: flex; gap: 18px; margin-top: 10px; font-size: 12px; color: var(--steel); }
+.prob-legend .k { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+
+.pred-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; margin-bottom: 18px; }
+.pred-cell { background: var(--slate); padding: 12px 14px; }
+.pred-cell .l { font-size: 11px; color: var(--steel); text-transform: uppercase; letter-spacing: 0.06em; }
+.pred-cell .v { font-size: 18px; font-weight: 600; margin-top: 4px; }
+.pred-cell .v.teal { color: var(--teal-text); }
+.pred-rationale { font-size: 13px; color: var(--steel); line-height: 1.7; max-width: 65ch; border-top: 1px solid var(--hairline); padding-top: 16px; }
+.pred-rationale b { color: var(--ink); font-weight: 500; }
+.pred-actions { display: flex; gap: 10px; margin-top: 18px; align-items: flex-end; }
+.pred-actions .stake-field { flex: 1; }
+
+/* shimmer loader */
+.shimmer-line { height: 14px; border-radius: 4px; margin-bottom: 12px;
+  background: linear-gradient(90deg, var(--raised) 0%, #F2F5F8 50%, var(--raised) 100%);
+  background-size: 200% 100%; animation: shimmer 1.2s var(--ease) infinite; }
+.shimmer-line.w70 { width: 70%; } .shimmer-line.w50 { width: 50%; } .shimmer-line.bar { height: 40px; }
+.shimmer-label { font-size: 12px; color: var(--steel); margin-bottom: 16px; letter-spacing: 0.04em; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ---- Stats strip ---- */
+.stats { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.stats .stat { padding: 0 22px; border-left: 1px solid var(--hairline); }
+.stats .stat:first-child { padding-left: 0; border-left: none; }
+.stats .stat .l { font-size: 11px; color: var(--steel); text-transform: uppercase; letter-spacing: 0.06em; }
+.stats .stat .v { font-size: 20px; font-weight: 600; margin-top: 3px; }
+.stats .stat .v.profit { color: var(--profit); }
+.stats .stat .v.deficit { color: var(--deficit); }
+.stats .stat .v.draw { color: var(--steel); }
+
+/* ---- Ledger table ---- */
+.ledger-wrap { overflow-x: auto; }
+table.ledger { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.ledger th { font-size: 11px; color: var(--steel); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+table.ledger th.r, table.ledger td.r { text-align: right; }
+table.ledger td { padding: 12px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+table.ledger tr:hover td { background: var(--raised); }
+table.ledger .status { font-size: 12px; font-weight: 500; }
+table.ledger .status.profit { color: var(--profit); }
+table.ledger .status.deficit { color: var(--deficit); }
+table.ledger .status.draw { color: var(--steel); }
+table.ledger .status.pending { color: var(--steel); }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 3px 9px; border-radius: 5px; border: 1px solid var(--hairline); color: var(--steel); }
+.pill.win { color: var(--profit); border-color: rgba(63,179,127,0.3); }
+.pill.lose { color: var(--deficit); border-color: rgba(217,99,91,0.3); }
+.settle-btns { display: flex; gap: 4px; justify-content: flex-end; }
+.led-empty { padding: 40px 20px; text-align: center; color: var(--steel); line-height: 1.8; }
+.led-team { font-weight: 500; }
+.led-pick { color: var(--teal-text); font-size: 12px; }
+
+@media (max-width: 880px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; }
+  .stats { gap: 0; }
+  .stats .stat { padding: 0 14px; }
+}
+@media (max-width: 560px) {
+  .wrap { padding: 0 14px 60px; }
+  .stats .stat { padding: 8px 12px; border-left: none; border-top: 1px solid var(--hairline); flex: 1 1 45%; }
+  .stats .stat:first-child { border-top: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>竞彩预测 · 模拟账本</h1>
+      <span class="tag">Prediction Terminal</span>
+    </div>
+    <span class="clock num" id="clock">—</span>
+  </header>
+
+  <div class="reminder">
+    <svg class="mk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.5"/></svg>
+    <span>本工具所有金额均为虚拟模拟资金，仅供策略复盘与记录，不涉及任何真实投注。</span>
+  </div>
+
+  <div class="shell">
+
+    <aside class="rail">
+      <section class="panel">
+        <div class="panel-head"><h2>AI 配置</h2><span class="meta">Model</span></div>
+        <div class="field">
+          <label for="baseurl">Base URL</label>
+          <input class="well mono" id="baseurl" type="text" placeholder="https://api.anthropic.com" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="protocol">协议</label>
+          <select class="well" id="protocol">
+            <option value="Anthropic">Claude (Anthropic)</option>
+            <option value="OpenAI">OpenAI</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="model">模型</label>
+          <input class="well mono" id="model" type="text" list="modellist" placeholder="claude-fable-5" autocomplete="off" />
+          <datalist id="modellist">
+            <option value="claude-fable-5"></option>
+            <option value="claude-opus-4-8"></option>
+            <option value="claude-sonnet-4-6"></option>
+          </datalist>
+        </div>
+        <div class="field">
+          <label for="apikey">API Key <span class="hint" id="keyhint" hidden>(已保存)</span></label>
+          <input class="well mono" id="apikey" type="password" placeholder="sk-…" autocomplete="off" />
+          <div class="err" id="keyerr" hidden></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="savekey" style="width:100%">保存配置</button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>粘贴赛事</h2><span class="meta">Input</span></div>
+        <div class="field">
+          <label for="paste">赛事与赔率</label>
+          <textarea class="well mono" id="paste" placeholder="周日001|世界杯|英格兰|法国|2026-06-20T19:00:00|2.55|3.30|2.80"></textarea>
+        </div>
+        <div class="field">
+          <label>格式：场次|联赛|主|客|开赛|主赔|平赔|客赔[|让球]（每行一场），亦支持 JSON 数组</label>
+        </div>
+        <div class="err" id="parseerr" hidden></div>
+        <div class="row2">
+          <button class="btn btn-primary" id="parsebtn">解析赛事</button>
+          <button class="btn btn-ghost" id="polybtn">拉取 Polymarket 世界杯</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="col">
+
+      <section class="panel">
+        <div class="panel-head"><h2>赛事队列</h2><span class="meta" id="matchcount">0 场</span></div>
+        <div class="matches" id="matches"></div>
+        <div class="led-empty" id="matchesEmpty">粘贴赛事与赔率，解析后将在此排列待预测的比赛。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>预测</h2><span class="meta">Signal</span></div>
+        <div id="predHost">
+          <div class="pred-empty">
+            <p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。概率与建议由后端 AI 模型给出，请先在「AI 配置」中填写服务信息。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>账本统计</h2><span class="meta">Ledger</span></div>
+        <div class="stats" id="stats">
+          <div class="stat"><div class="l">已结算</div><div class="v num" id="stSettled">0 笔</div></div>
+          <div class="stat"><div class="l">命中率</div><div class="v num draw" id="stHit">—</div></div>
+          <div class="stat"><div class="l">累计盈亏</div><div class="v num draw" id="stPnl">0.00</div></div>
+          <div class="stat"><div class="l">ROI</div><div class="v num draw" id="stRoi">—</div></div>
+        </div>
+        <div class="ledger-wrap" style="margin-top:18px">
+          <table class="ledger" id="ledgerTable" hidden>
+            <thead>
+              <tr>
+                <th>注单</th><th>赛事</th><th>选择</th>
+                <th class="r">赔率</th><th class="r">本金</th><th class="r">盈亏</th>
+                <th>状态</th><th class="r">结算</th>
+              </tr>
+            </thead>
+            <tbody id="ledgerBody"></tbody>
+          </table>
+          <div class="led-empty" id="ledgerEmpty">粘贴赛事 → 预测 → 记一笔，盈亏统计将在结算后出现。</div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<!-- APP_SCRIPT -->
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---- state (backend is source of truth; matches kept client-side for selection) ----
+  var matches = [];      // Match[] from backend: {id, league, home, away, kickoff, odds:{home,draw,away}, handicap}
+  var matchMap = {};     // id -> "home vs away" for nicer ledger display
+  var selId = null;
+  var prediction = null; // last Prediction for the selected match
+
+  // ---- fetch helper ----
+  function api(path, opts) {
+    opts = opts || {};
+    return fetch(path, opts).then(function (res) {
+      return res.text().then(function (txt) {
+        var data = {};
+        try { data = txt ? JSON.parse(txt) : {}; } catch (e) { data = {}; }
+        if (!res.ok) { throw new Error(data.error || ('HTTP ' + res.status)); }
+        return data;
+      });
+    });
+  }
+  function postJSON(path, body) {
+    return api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  // ---- clock ----
+  function tick() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    $('clock').textContent = d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ---- AI config ----
+  function loadConfig() {
+    api('/api/config').then(function (c) {
+      if (c.base_url) $('baseurl').value = c.base_url;
+      if (c.model) $('model').value = c.model;
+      if (c.protocol) $('protocol').value = c.protocol;
+      if (c.has_key) { $('keyhint').hidden = false; $('apikey').placeholder = '已保存 · 重新输入以替换'; }
+      else { $('keyhint').hidden = true; }
+    }).catch(function () { /* config endpoint optional on first boot */ });
+  }
+  $('savekey').addEventListener('click', function () {
+    $('keyerr').hidden = true;
+    var base = $('baseurl').value.trim();
+    var model = $('model').value.trim();
+    var key = $('apikey').value.trim();
+    var protocol = $('protocol').value;
+    if (!base || !model || !key) {
+      $('keyerr').textContent = '请填写 Base URL、模型与 API Key 后再保存。';
+      $('keyerr').hidden = false; return;
+    }
+    postJSON('/api/config', { base_url: base, api_key: key, model: model, protocol: protocol })
+      .then(function () {
+        $('apikey').value = '';
+        $('keyerr').style.color = 'var(--teal-text)';
+        $('keyerr').textContent = '配置已保存。';
+        $('keyerr').hidden = false;
+        setTimeout(function () { $('keyerr').hidden = true; $('keyerr').style.color = ''; }, 2200);
+        loadConfig();
+      })
+      .catch(function (e) {
+        $('keyerr').style.color = '';
+        $('keyerr').textContent = '保存失败：' + e.message;
+        $('keyerr').hidden = false;
+      });
+  });
+
+  // ---- odds display helper (draw === 0 means 2-way market) ----
+  function oddsTxt(o) { return o > 0 ? o.toFixed(2) : '—'; }
+  function oddsForPick(m, pick) {
+    if (pick === 'Home') return m.odds.home;
+    if (pick === 'Away') return m.odds.away;
+    return m.odds.draw;
+  }
+  var PICK_LABEL = { Home: '主胜', Draw: '平局', Away: '客胜' };
+
+  function setMatches(list) {
+    matches = list || [];
+    matchMap = {};
+    matches.forEach(function (m) { matchMap[m.id] = m.home + ' vs ' + m.away; });
+    selId = matches.length ? matches[0].id : null;
+    prediction = null;
+    renderMatches(); renderPredEmpty();
+  }
+
+  // ---- parse matches ----
+  $('parsebtn').addEventListener('click', function () {
+    $('parseerr').hidden = true;
+    var raw = $('paste').value;
+    if (!raw.trim()) {
+      $('parseerr').textContent = '请先粘贴赛事内容。';
+      $('parseerr').hidden = false; return;
+    }
+    postJSON('/api/matches', { raw: raw })
+      .then(function (list) {
+        if (!list.length) { throw new Error('未能识别任何赛事，请检查格式。'); }
+        setMatches(list);
+      })
+      .catch(function (e) {
+        $('parseerr').textContent = '解析失败：' + e.message;
+        $('parseerr').hidden = false;
+      });
+  });
+
+  $('polybtn').addEventListener('click', function () {
+    $('parseerr').hidden = true;
+    api('/api/matches/polymarket')
+      .then(function (list) {
+        if (!list.length) { throw new Error('Polymarket 暂无可用世界杯市场。'); }
+        setMatches(list);
+      })
+      .catch(function (e) {
+        $('parseerr').textContent = '拉取失败：' + e.message;
+        $('parseerr').hidden = false;
+      });
+  });
+
+  // ---- render match queue ----
+  function renderMatches() {
+    var host = $('matches'); host.innerHTML = '';
+    $('matchcount').textContent = matches.length + ' 场';
+    $('matchesEmpty').hidden = matches.length > 0;
+    matches.forEach(function (m) {
+      var row = document.createElement('div');
+      row.className = 'match-row' + (m.id === selId ? ' active' : '');
+      row.innerHTML =
+        '<div class="mid mono">' + esc(m.id) + '</div>' +
+        '<div><div class="teams">' + esc(m.home) + '<span class="vs">vs</span>' + esc(m.away) + '</div>' +
+          '<div class="league">' + esc(m.league) + '</div></div>' +
+        '<div class="odds mono"><span>主<b>' + oddsTxt(m.odds.home) + '</b></span>' +
+          '<span>平<b>' + oddsTxt(m.odds.draw) + '</b></span>' +
+          '<span>客<b>' + oddsTxt(m.odds.away) + '</b></span></div>';
+      row.addEventListener('click', function () { selId = m.id; prediction = null; renderMatches(); renderPredEmpty(); });
+      host.appendChild(row);
+    });
+  }
+
+  function currentMatch() { return matches.filter(function (m) { return m.id === selId; })[0] || null; }
+
+  function oddsLine(m) {
+    return [oddsTxt(m.odds.home), oddsTxt(m.odds.draw), oddsTxt(m.odds.away)].join(' / ');
+  }
+
+  // ---- prediction panel ----
+  function renderPredEmpty() {
+    var m = currentMatch();
+    if (!m) { $('predHost').innerHTML = '<div class="pred-empty"><p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。</p></div>'; return; }
+    $('predHost').innerHTML =
+      '<div class="pred-card">' +
+        '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
+        '<div class="pred-league">' + esc(m.league) + ' · 赔率 ' + oddsLine(m) + '</div>' +
+        '<div class="err" id="prederr" hidden></div>' +
+        '<button class="btn btn-primary" id="predbtn" style="width:auto;padding-left:32px;padding-right:32px">预测</button>' +
+      '</div>';
+    $('predbtn').addEventListener('click', runPredict);
+  }
+
+  function runPredict() {
+    var m = currentMatch(); if (!m) return;
+    $('predHost').innerHTML =
+      '<div class="pred-card"><div class="shimmer-label mono">预测中…</div>' +
+      '<div class="shimmer-line w50"></div><div class="shimmer-line bar"></div>' +
+      '<div class="shimmer-line"></div><div class="shimmer-line w70"></div></div>';
+    postJSON('/api/predict', m)
+      .then(function (p) { prediction = p; showPrediction(m, p); })
+      .catch(function (e) { showPredError(m, e); });
+  }
+
+  function showPredError(m, e) {
+    var msg = /未配置|HTTP 400/.test(e.message)
+      ? '尚未配置 AI 模型，请先在左上「AI 配置」中填写 Base URL、模型与 API Key。'
+      : '预测失败：' + e.message;
+    renderPredEmpty();
+    var box = $('prederr');
+    if (box) { box.textContent = msg; box.hidden = false; }
+  }
+
+  function showPrediction(m, p) {
+    var probs = p.probs || { home: 0, draw: 0, away: 0 };
+    var order = [['Home', probs.home, m.home], ['Draw', probs.draw, '平局'], ['Away', probs.away, m.away]];
+    var pickTeam = p.pick === 'Home' ? m.home : p.pick === 'Away' ? m.away : '平局';
+    var pickOdds = oddsForPick(m, p.pick);
+    var conf = (p.confidence || 0) * 100;
+
+    var segs = '';
+    order.forEach(function (o) {
+      var cls = o[0] === p.pick ? 'pick' : 'rest';
+      var w = Math.round((o[1] || 0) * 100);
+      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:0" data-grow="' + (o[1] || 0) + '">' +
+        '<span class="lab">' + PICK_LABEL[o[0]] + '</span><span class="num">' + w + '%</span></div>';
+    });
+
+    $('predHost').innerHTML =
+      '<div class="pred-card">' +
+        '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
+        '<div class="pred-league">' + esc(m.league) + ' · 模型 ' + esc(p.model || '') + '</div>' +
+        '<div class="prob-wrap"><div class="prob-bar" id="probBar">' + segs + '</div>' +
+          '<div class="prob-legend"><span><i class="k" style="background:var(--teal)"></i>建议选择</span>' +
+          '<span><i class="k" style="background:#CDD5DF"></i>其余结果</span></div></div>' +
+        '<div class="pred-grid">' +
+          '<div class="pred-cell"><div class="l">建议选择</div><div class="v teal">' + esc(PICK_LABEL[p.pick] + ' · ' + pickTeam) + '</div></div>' +
+          '<div class="pred-cell"><div class="l">置信概率</div><div class="v num">' + conf.toFixed(1) + '%</div></div>' +
+          '<div class="pred-cell"><div class="l">选项赔率</div><div class="v num">' + oddsTxt(pickOdds) + '</div></div>' +
+        '</div>' +
+        '<div class="pred-rationale">' + esc(p.rationale || '') + '</div>' +
+        '<div class="pred-actions">' +
+          '<div class="stake-field field" style="margin:0"><label for="stake">模拟本金</label>' +
+            '<input class="well mono" id="stake" type="number" min="1" step="1" value="100" /></div>' +
+          '<button class="btn btn-primary" id="logbtn" style="width:auto;flex:0 0 auto">记一笔</button>' +
+        '</div>' +
+        '<div class="err" id="logerr" hidden></div>' +
+      '</div>';
+
+    // cascade fill
+    requestAnimationFrame(function () {
+      var bar = $('probBar'); if (!bar) return;
+      Array.prototype.forEach.call(bar.children, function (seg) {
+        seg.style.flexGrow = seg.getAttribute('data-grow');
+      });
+    });
+
+    $('logbtn').addEventListener('click', function () {
+      var stake = parseFloat($('stake').value);
+      if (!(stake > 0)) { $('stake').focus(); return; }
+      logBet(m, p.pick, pickOdds, stake);
+    });
+  }
+
+  // ---- ledger ----
+  function logBet(m, pick, odds, stake) {
+    $('logerr').hidden = true;
+    postJSON('/api/bets', { match_id: m.id, pick: pick, stake: stake, odds: odds })
+      .then(function () { refreshLedger(); })
+      .catch(function (e) {
+        var box = $('logerr');
+        if (box) { box.textContent = '记录失败：' + e.message; box.hidden = false; }
+      });
+  }
+
+  function settle(betId, actual) {
+    postJSON('/api/settle', { bet_id: betId, actual_result: actual })
+      .then(function () { refreshLedger(); })
+      .catch(function (e) {
+        $('ledgerEmpty').textContent = '结算失败：' + e.message;
+        $('ledgerEmpty').hidden = false;
+      });
+  }
+
+  function refreshLedger() {
+    api('/api/bets').then(renderLedger).catch(function (e) {
+      $('ledgerEmpty').textContent = '无法加载账本：' + e.message;
+      $('ledgerEmpty').hidden = false;
+    });
+    api('/api/stats').then(renderStats).catch(function () {});
+  }
+
+  function pnlFor(b) {
+    if (b.status === 'Won') return b.stake * (b.odds_at_bet - 1);
+    if (b.status === 'Lost') return -b.stake;
+    return null;
+  }
+
+  function renderLedger(bets) {
+    var body = $('ledgerBody'), has = bets.length > 0;
+    $('ledgerTable').hidden = !has; $('ledgerEmpty').hidden = has;
+    body.innerHTML = '';
+    bets.forEach(function (b) {
+      var tr = document.createElement('tr');
+      var statusCls = b.status === 'Won' ? 'profit' : b.status === 'Lost' ? 'deficit' : 'pending';
+      var statusTxt = b.status === 'Won' ? '命中' : b.status === 'Lost' ? '未中' : '待结算';
+      var pnl = pnlFor(b);
+      var pnlCell = pnl === null ? '<span class="num" style="color:var(--steel)">—</span>'
+        : '<span class="num" style="color:' + (pnl >= 0 ? 'var(--profit)' : 'var(--deficit)') + '">' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '</span>';
+      var teams = matchMap[b.match_id] || b.match_id;
+      var action;
+      if (b.status === 'Pending') {
+        action = '<div class="settle-btns">' +
+          '<button class="btn btn-ghost btn-sm" data-bet="' + b.id + '" data-res="Home">主胜</button>' +
+          '<button class="btn btn-ghost btn-sm" data-bet="' + b.id + '" data-res="Draw">平</button>' +
+          '<button class="btn btn-ghost btn-sm" data-bet="' + b.id + '" data-res="Away">客胜</button></div>';
+      } else {
+        action = '<span class="num" style="color:var(--steel);font-size:12px">已结算</span>';
+      }
+      tr.innerHTML =
+        '<td class="mono">' + esc(String(b.id)) + '</td>' +
+        '<td><span class="led-team">' + esc(teams) + '</span><br><span class="mono" style="color:var(--steel);font-size:11px">' + esc(b.match_id) + '</span></td>' +
+        '<td><span class="led-pick">' + esc(PICK_LABEL[b.pick] || b.pick) + '</span></td>' +
+        '<td class="r num">' + b.odds_at_bet.toFixed(2) + '</td>' +
+        '<td class="r num">' + b.stake.toFixed(2) + '</td>' +
+        '<td class="r">' + pnlCell + '</td>' +
+        '<td><span class="status ' + statusCls + '">' + statusTxt + '</span></td>' +
+        '<td class="r">' + action + '</td>';
+      body.appendChild(tr);
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-bet]'), function (btn) {
+      btn.addEventListener('click', function () {
+        settle(parseInt(btn.getAttribute('data-bet'), 10), btn.getAttribute('data-res'));
+      });
+    });
+  }
+
+  function renderStats(st) {
+    var settled = st.settled || 0;
+    $('stSettled').textContent = settled + ' 笔';
+    var hitEl = $('stHit'), pnlEl = $('stPnl'), roiEl = $('stRoi');
+    if (!settled) {
+      hitEl.textContent = '—'; hitEl.className = 'v num draw';
+      pnlEl.textContent = '0.00'; pnlEl.className = 'v num draw';
+      roiEl.textContent = '—'; roiEl.className = 'v num draw';
+      return;
+    }
+    var hit = (st.hit_rate || 0) * 100;
+    var pnl = st.total_pnl || 0;
+    var roi = (st.roi || 0) * 100;
+    hitEl.textContent = hit.toFixed(1) + '%';
+    hitEl.className = 'v num ' + (hit >= 50 ? 'profit' : 'draw');
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+    pnlEl.className = 'v num ' + (pnl > 0 ? 'profit' : pnl < 0 ? 'deficit' : 'draw');
+    roiEl.textContent = (roi >= 0 ? '+' : '') + roi.toFixed(1) + '%';
+    roiEl.className = 'v num ' + (roi > 0 ? 'profit' : roi < 0 ? 'deficit' : 'draw');
+  }
+
+  // ---- helpers ----
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]); }); }
+
+  // ---- boot ----
+  loadConfig();
+  renderMatches(); renderPredEmpty();
+  refreshLedger();
+})();
+</script>
+</body>
+</html>
