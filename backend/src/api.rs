@@ -13,7 +13,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub cfg: Arc<Mutex<Option<ApiConfig>>>,
     pub cfg_path: String,
-    pub poly: std::sync::Arc<crate::polymarket::PolyCache>,
+    pub poly: std::sync::Arc<crate::cache::MatchCache>,
+    pub sporttery: std::sync::Arc<crate::cache::MatchCache>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -22,6 +23,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/matches/polymarket", get(polymarket_matches))
         .route("/api/matches/polymarket/dates", get(polymarket_dates))
         .route("/api/matches/polymarket/status", get(polymarket_status))
+        .route("/api/matches/sporttery", get(sporttery_matches))
+        .route("/api/matches/sporttery/dates", get(sporttery_dates))
+        .route("/api/matches/sporttery/status", get(sporttery_status))
         .route("/api/predict", post(predict))
         .route("/api/bets", get(list_bets).post(place_bet))
         .route("/api/settle", post(settle))
@@ -56,11 +60,27 @@ async fn polymarket_matches(State(s): State<AppState>, Query(q): Query<PolyQuery
 }
 
 async fn polymarket_dates(State(s): State<AppState>) -> impl IntoResponse {
-    (StatusCode::OK, Json(json!(crate::polymarket::available_dates(&s.poly.snapshot())))).into_response()
+    (StatusCode::OK, Json(json!(crate::cache::available_dates(&s.poly.snapshot())))).into_response()
 }
 
 async fn polymarket_status(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "updated_at": s.poly.updated(), "count": s.poly.len() }))).into_response()
+}
+
+async fn sporttery_matches(State(s): State<AppState>, Query(q): Query<PolyQuery>) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(40).min(200);
+    let mut ms = s.sporttery.snapshot();
+    if let Some(d) = q.date.as_deref() { ms.retain(|m| m.kickoff == d); }
+    ms.truncate(limit);
+    (StatusCode::OK, Json(json!(ms))).into_response()
+}
+
+async fn sporttery_dates(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!(crate::cache::available_dates(&s.sporttery.snapshot())))).into_response()
+}
+
+async fn sporttery_status(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({ "updated_at": s.sporttery.updated(), "count": s.sporttery.len() }))).into_response()
 }
 
 async fn predict(State(s): State<AppState>, Json(m): Json<Match>) -> impl IntoResponse {

@@ -1,6 +1,8 @@
 mod domain;
 mod source;
 mod polymarket;
+mod sporttery;
+mod cache;
 mod ledger;
 mod predictor;
 mod config;
@@ -18,13 +20,30 @@ async fn main() {
     let cfg_path = config::default_path();
     let cfg = config::load(&cfg_path).unwrap_or(None);
 
-    let poly = std::sync::Arc::new(polymarket::PolyCache::new("poly_cache.json"));
+    let poly = std::sync::Arc::new(cache::MatchCache::new("poly_cache.json"));
     poly.load_disk();
+    let sporttery = std::sync::Arc::new(cache::MatchCache::new("sporttery_cache.json"));
+    sporttery.load_disk();
     {
         let p = poly.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = p.refresh().await { eprintln!("polymarket refresh failed: {e}"); }
+                match polymarket::fetch_and_map().await {
+                    Ok(ms) => p.store(ms),
+                    Err(e) => eprintln!("polymarket refresh failed: {e}"),
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+            }
+        });
+    }
+    {
+        let s = sporttery.clone();
+        tokio::spawn(async move {
+            loop {
+                match sporttery::fetch_and_map().await {
+                    Ok(ms) => s.store(ms),
+                    Err(e) => eprintln!("sporttery refresh failed: {e}"),
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
             }
         });
@@ -35,6 +54,7 @@ async fn main() {
         cfg: Arc::new(Mutex::new(cfg)),
         cfg_path,
         poly,
+        sporttery,
     };
 
     let app = api::router(state)

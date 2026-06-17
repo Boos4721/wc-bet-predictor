@@ -6,4 +6,5 @@ dist/
 config.local.*
 .env
 poly_cache.json
+sporttery_cache.json
 .omc/

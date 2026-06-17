@@ -10,7 +10,8 @@ fn app() -> axum::Router {
         store: Arc::new(Store::open(":memory:").unwrap()),
         cfg: Arc::new(Mutex::new(None)),
         cfg_path: std::env::temp_dir().join("wcbp-test-cfg.json").to_string_lossy().into(),
-        poly: std::sync::Arc::new(wc_bet_predictor::polymarket::PolyCache::new("/tmp/wcbp-test-poly.json")),
+        poly: std::sync::Arc::new(wc_bet_predictor::cache::MatchCache::new("/tmp/wcbp-test-poly.json")),
+        sporttery: std::sync::Arc::new(wc_bet_predictor::cache::MatchCache::new("/tmp/wcbp-test-sporttery.json")),
     };
     api::router(state)
 }

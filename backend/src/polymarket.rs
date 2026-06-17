@@ -1,8 +1,5 @@
 use crate::domain::{Match, Odds};
-use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
-use std::sync::RwLock;
 
 const SERIES_URL: &str =
     "https://gamma-api.polymarket.com/events?closed=false&series_id=11433";
@@ -41,9 +38,6 @@ fn translate_team(name: &str) -> String {
         other => other,
     }.to_string()
 }
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DateCount { pub date: String, pub count: usize }
 
 async fn fetch_events() -> Result<Value, String> {
     let client = reqwest::Client::new();
@@ -143,63 +137,15 @@ pub fn map_events(events: &Value) -> Vec<Match> {
     keyed.into_iter().map(|(_, m)| m).collect()
 }
 
-pub fn available_dates(ms: &[Match]) -> Vec<DateCount> {
-    let mut map: BTreeMap<String, usize> = BTreeMap::new();
-    for m in ms {
-        if !m.kickoff.is_empty() {
-            *map.entry(m.kickoff.clone()).or_insert(0) += 1;
-        }
-    }
-    map.into_iter().map(|(date, count)| DateCount { date, count }).collect()
-}
-
-pub struct PolyCache {
-    matches: RwLock<Vec<Match>>,
-    updated: RwLock<Option<String>>,
-    path: String,
-}
-
-impl PolyCache {
-    pub fn new(path: &str) -> Self {
-        PolyCache { matches: RwLock::new(Vec::new()), updated: RwLock::new(None), path: path.to_string() }
-    }
-
-    /// 冷启动:若磁盘快照存在则载入内存(不联网)。
-    pub fn load_disk(&self) {
-        if let Ok(s) = std::fs::read_to_string(&self.path) {
-            if let Ok(ms) = serde_json::from_str::<Vec<Match>>(&s) {
-                *self.matches.write().unwrap() = ms;
-            }
-        }
-    }
-
-    /// 联网刷新:抓取→映射→换入内存→写磁盘。返回条数。
-    pub async fn refresh(&self) -> Result<usize, String> {
-        let events = fetch_events().await?;       // network await — NO lock held
-        let ms = map_events(&events);
-        let n = ms.len();
-        if let Ok(s) = serde_json::to_string(&ms) {
-            let _ = std::fs::write(&self.path, s);  // best-effort disk snapshot
-        }
-        *self.matches.write().unwrap() = ms;
-        *self.updated.write().unwrap() = Some(now_stamp());
-        Ok(n)
-    }
-
-    pub fn snapshot(&self) -> Vec<Match> { self.matches.read().unwrap().clone() }
-    pub fn updated(&self) -> Option<String> { self.updated.read().unwrap().clone() }
-    pub fn len(&self) -> usize { self.matches.read().unwrap().len() }
-}
-
-fn now_stamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    format!("@{secs}")
+pub async fn fetch_and_map() -> Result<Vec<Match>, String> {
+    let events = fetch_events().await?;
+    Ok(map_events(&events))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::available_dates;
 
     fn sample_event() -> Value {
         serde_json::json!({
@@ -315,12 +261,5 @@ mod tests {
         assert_eq!(ms[0].id, "early"); // 14:00 在前
         assert_eq!(ms[1].id, "late");  // 20:00 在后
         assert_eq!(ms[0].kickoff, "2026-06-17"); // kickoff 仍为比赛日
-    }
-
-    #[test]
-    fn cache_snapshot_empty_then_loads_nothing_when_no_disk() {
-        let c = PolyCache::new("/tmp/wcbp-nonexistent-cache-xyz.json");
-        c.load_disk();
-        assert_eq!(c.snapshot().len(), 0);
     }
 }

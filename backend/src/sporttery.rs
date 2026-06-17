@@ -1,0 +1,163 @@
+use crate::domain::{Match, Odds};
+use serde_json::Value;
+
+const LIST_URL: &str =
+    "https://webapi.sporttery.cn/gateway/uniform/football/getMatchListV1.qry?clientCode=3001";
+
+/// 解析字符串小数赔率;空或非正返回 None。
+fn parse_odd(v: &Value) -> Option<f64> {
+    let s = v.as_str()?;
+    let p: f64 = s.trim().parse().ok()?;
+    if p > 0.0 { Some(p) } else { None }
+}
+
+/// 在 oddsList 中找指定 poolCode 且 h/d/a 均有效的赔率项。
+fn find_pool<'a>(odds_list: &'a [Value], pool: &str) -> Option<&'a Value> {
+    odds_list.iter().find(|o| o["poolCode"].as_str() == Some(pool))
+}
+
+fn pool_odds(item: &Value) -> Option<Odds> {
+    let home = parse_odd(&item["h"])?;
+    let draw = parse_odd(&item["d"])?;
+    let away = parse_odd(&item["a"])?;
+    Some(Odds { home, draw, away })
+}
+
+/// 让球盘口:"-2.00" → Some(-2);空/不可解析 → None。
+fn parse_handicap(v: &Value) -> Option<i32> {
+    let s = v.as_str()?;
+    let f: f64 = s.trim().parse().ok()?;
+    Some(f.round() as i32)
+}
+
+/// 纯映射:读取根 JSON 的 value.matchInfoList,每场子赛事产出至多两行(HAD + HHAD)。
+pub fn map_matches(value: &Value) -> Vec<Match> {
+    let mut keyed: Vec<((String, String, String), Match)> = Vec::new();
+    let Some(infos) = value["value"]["matchInfoList"].as_array() else { return Vec::new(); };
+    for info in infos {
+        let Some(subs) = info["subMatchList"].as_array() else { continue; };
+        for sm in subs {
+            let home = sm["homeTeamAllName"].as_str().unwrap_or("").to_string();
+            let away = sm["awayTeamAllName"].as_str().unwrap_or("").to_string();
+            let league = sm["leagueAllName"].as_str().unwrap_or("").to_string();
+            let kickoff = sm["businessDate"].as_str().unwrap_or("").to_string();
+            let num = sm["matchNumStr"].as_str().unwrap_or("").to_string();
+            let match_date = sm["matchDate"].as_str().unwrap_or("").to_string();
+            let match_time = sm["matchTime"].as_str().unwrap_or("").to_string();
+            let odds_list = sm["oddsList"].as_array().cloned().unwrap_or_default();
+
+            // HAD 行(胜平负)
+            if let Some(odds) = find_pool(&odds_list, "HAD").and_then(pool_odds) {
+                let m = Match {
+                    id: num.clone(),
+                    league: league.clone(),
+                    home: home.clone(),
+                    away: away.clone(),
+                    kickoff: kickoff.clone(),
+                    odds,
+                    handicap: None,
+                };
+                keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
+            }
+            // HHAD 行(让球胜平负)
+            if let Some(item) = find_pool(&odds_list, "HHAD") {
+                if let Some(odds) = pool_odds(item) {
+                    let m = Match {
+                        id: format!("{num}让"),
+                        league: format!("{league}·让球"),
+                        home: home.clone(),
+                        away: away.clone(),
+                        kickoff: kickoff.clone(),
+                        odds,
+                        handicap: parse_handicap(&item["goalLine"]),
+                    };
+                    keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
+                }
+            }
+        }
+    }
+    // 按(比赛日, 开赛时间, id)升序,使队列按时间先后排列。
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed.into_iter().map(|(_, m)| m).collect()
+}
+
+async fn fetch_raw() -> Result<Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client.get(LIST_URL)
+        .header("user-agent", "wc-bet-predictor")
+        .send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Sporttery HTTP {}", resp.status()));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub async fn fetch_and_map() -> Result<Vec<Match>, String> {
+    Ok(map_matches(&fetch_raw().await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn root() -> Value {
+        serde_json::json!({ "value": { "matchInfoList": [
+            { "businessDate": "2026-06-17", "subMatchList": [
+                {
+                    "homeTeamAllName": "葡萄牙", "awayTeamAllName": "刚果(金)",
+                    "leagueAllName": "世界杯", "matchDate": "2026-06-18", "matchTime": "01:00",
+                    "businessDate": "2026-06-17", "matchNumStr": "周三021", "matchNum": 3021,
+                    "matchId": 2040182, "matchStatus": "Selling",
+                    "oddsList": [
+                        { "poolCode": "HHAD", "h": "2.54", "d": "4.00", "a": "2.06", "goalLine": "-2.00" },
+                        { "poolCode": "HAD", "h": "1.13", "d": "5.86", "a": "13.50", "goalLine": "" },
+                        { "poolCode": "CRS", "h": "", "d": "", "a": "", "goalLine": "" }
+                    ]
+                },
+                {
+                    "homeTeamAllName": "英格兰", "awayTeamAllName": "克罗地亚",
+                    "leagueAllName": "世界杯", "matchDate": "2026-06-17", "matchTime": "20:00",
+                    "businessDate": "2026-06-17", "matchNumStr": "周三011", "matchNum": 3011,
+                    "matchId": 2040111, "matchStatus": "Selling",
+                    "oddsList": [
+                        { "poolCode": "HAD", "h": "1.80", "d": "3.50", "a": "4.20", "goalLine": "" }
+                    ]
+                }
+            ]}
+        ]}})
+    }
+
+    #[test]
+    fn maps_had_and_hhad_rows() {
+        let ms = map_matches(&root());
+        // 葡萄牙场: HAD + HHAD = 2 rows; 英格兰场: HAD only = 1 row → total 3
+        assert_eq!(ms.len(), 3);
+        // chronological: 英格兰 20:00 on 06-17 before 葡萄牙 01:00 on 06-18
+        assert_eq!(ms[0].home, "英格兰");
+        // find the 葡萄牙 HAD row
+        let had = ms.iter().find(|m| m.id == "周三021").unwrap();
+        assert_eq!(had.home, "葡萄牙"); assert_eq!(had.away, "刚果(金)");
+        assert_eq!(had.kickoff, "2026-06-17"); assert_eq!(had.handicap, None);
+        assert!((had.odds.home - 1.13).abs() < 1e-9);
+        assert!((had.odds.away - 13.50).abs() < 1e-9);
+        // 葡萄牙 HHAD row
+        let hh = ms.iter().find(|m| m.id == "周三021让").unwrap();
+        assert_eq!(hh.handicap, Some(-2));
+        assert!((hh.odds.home - 2.54).abs() < 1e-9);
+        assert!(hh.league.contains("让球"));
+    }
+
+    #[test]
+    fn skips_pool_with_empty_odds() {
+        // CRS has empty h/d/a → never produces a row; only HAD/HHAD do
+        let ms = map_matches(&root());
+        assert!(ms.iter().all(|m| !m.id.contains("CRS")));
+    }
+
+    #[test]
+    fn empty_value_yields_empty() {
+        assert_eq!(map_matches(&serde_json::json!({"value":{"matchInfoList":[]}})).len(), 0);
+        assert_eq!(map_matches(&serde_json::json!({})).len(), 0);
+    }
+}
