@@ -93,10 +93,13 @@ struct PredictIn {
     m: crate::domain::Match,
     #[serde(default)]
     play: crate::predictor::Play,
+    #[serde(default)]
+    cfg: Option<ApiConfig>,
 }
 
 async fn predict(State(s): State<AppState>, Json(b): Json<PredictIn>) -> impl IntoResponse {
-    let cfg = { s.cfg.lock().unwrap().clone() };
+    // 优先用请求内联的配置(浏览器存储),回退到服务端内存配置。
+    let cfg = b.cfg.or_else(|| s.cfg.lock().unwrap().clone());
     let Some(cfg) = cfg else {
         return err(StatusCode::BAD_REQUEST, "未配置 AI,请先在配置区填写").into_response();
     };
@@ -110,10 +113,11 @@ async fn predict(State(s): State<AppState>, Json(b): Json<PredictIn>) -> impl In
 struct ChatIn {
     #[serde(default)] messages: Vec<crate::predictor::ChatMsg>,
     #[serde(default)] matches: Vec<crate::domain::Match>,
+    #[serde(default)] cfg: Option<ApiConfig>,
 }
 
 async fn chat(State(s): State<AppState>, Json(b): Json<ChatIn>) -> impl IntoResponse {
-    let cfg = { s.cfg.lock().unwrap().clone() };
+    let cfg = b.cfg.or_else(|| s.cfg.lock().unwrap().clone());
     let Some(cfg) = cfg else {
         return err(StatusCode::BAD_REQUEST, "未配置 AI,请先在配置区填写").into_response();
     };

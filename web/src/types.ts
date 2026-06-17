@@ -68,7 +68,8 @@ export interface AiConfig {
   base_url?: string;
   model?: string;
   protocol?: Protocol;
-  has_key?: boolean;
+  api_key?: string;   // 仅存浏览器 localStorage;随 predict/chat 请求发给后端代发
+  has_key?: boolean;  // UI 提示用(localStorage 里是否已有 key)
 }
 
 export interface DayCount {

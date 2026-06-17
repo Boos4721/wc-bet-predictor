@@ -116,15 +116,25 @@ function currentModel(): string {
   return sel.value === CUSTOM ? el<HTMLInputElement>("modelCustom").value.trim() : sel.value;
 }
 
+// AI 配置存浏览器 localStorage(含 Key);预测/对话时随请求发给后端代发。
+const CFG_KEY = "wcbp.aicfg";
+
+function storedCfg(): AiConfig | null {
+  try {
+    const raw = localStorage.getItem(CFG_KEY);
+    return raw ? (JSON.parse(raw) as AiConfig) : null;
+  } catch { return null; }
+}
+
 function loadConfig(): void {
-  api<AiConfig>("/api/config").then((c) => {
-    if (c.base_url) el<HTMLInputElement>("baseurl").value = c.base_url;
-    if (c.protocol) el<HTMLSelectElement>("protocol").value = c.protocol;
-    populateModels(c.model);
-    const keyhint = el("keyhint");
-    if (c.has_key) { keyhint.hidden = false; el<HTMLInputElement>("apikey").placeholder = "已保存 · 重新输入以替换"; }
-    else { keyhint.hidden = true; }
-  }).catch(() => { /* config endpoint optional on first boot */ });
+  const c = storedCfg();
+  if (!c) return;
+  if (c.base_url) el<HTMLInputElement>("baseurl").value = c.base_url;
+  if (c.protocol) el<HTMLSelectElement>("protocol").value = c.protocol;
+  populateModels(c.model);
+  const keyhint = el("keyhint");
+  if (c.api_key) { keyhint.hidden = false; el<HTMLInputElement>("apikey").placeholder = "已保存 · 重新输入以替换"; }
+  else { keyhint.hidden = true; }
 }
 
 function saveConfig(): void {
@@ -133,25 +143,33 @@ function saveConfig(): void {
   const base = el<HTMLInputElement>("baseurl").value.trim();
   const model = currentModel();
   const key = el<HTMLInputElement>("apikey").value.trim();
-  const protocol = el<HTMLSelectElement>("protocol").value;
-  if (!base || !model || !key) {
+  const protocol = el<HTMLSelectElement>("protocol").value as AiConfig["protocol"];
+  // 允许沿用已存的 Key:输入框为空但 localStorage 已有时,保留旧 Key。
+  const existing = storedCfg();
+  const apiKey = key || existing?.api_key || "";
+  if (!base || !model || !apiKey) {
     keyerr.textContent = "请填写 Base URL、模型与 API Key 后再保存。";
     keyerr.hidden = false; return;
   }
-  postJSON("/api/config", { base_url: base, api_key: key, model, protocol })
-    .then(() => {
-      el<HTMLInputElement>("apikey").value = "";
-      keyerr.style.color = "var(--teal-text)";
-      keyerr.textContent = "配置已保存。";
-      keyerr.hidden = false;
-      setTimeout(() => { keyerr.hidden = true; keyerr.style.color = ""; }, 2200);
-      loadConfig();
-    })
-    .catch((e) => {
-      keyerr.style.color = "";
-      keyerr.textContent = "保存失败：" + e.message;
-      keyerr.hidden = false;
-    });
+  try {
+    localStorage.setItem(CFG_KEY, JSON.stringify({ base_url: base, model, protocol, api_key: apiKey }));
+  } catch (e) {
+    keyerr.textContent = "保存失败：" + (e as Error).message;
+    keyerr.hidden = false; return;
+  }
+  el<HTMLInputElement>("apikey").value = "";
+  keyerr.style.color = "var(--teal-text)";
+  keyerr.textContent = "配置已保存到本浏览器。";
+  keyerr.hidden = false;
+  setTimeout(() => { keyerr.hidden = true; keyerr.style.color = ""; }, 2200);
+  loadConfig();
+}
+
+// 组装发给后端的内联配置(后端据此代发 AI;无则返回 undefined)。
+function cfgPayload(): AiConfig | undefined {
+  const c = storedCfg();
+  if (!c || !c.base_url || !c.model || !c.api_key) return undefined;
+  return { base_url: c.base_url, model: c.model, protocol: c.protocol, api_key: c.api_key };
 }
 
 // ---- odds helpers (draw === 0 means 2-way market) ----
@@ -367,7 +385,7 @@ function runPredict(): void {
     '<div class="pred-card"><div class="shimmer-label mono">预测中…</div>' +
     '<div class="shimmer-line w50"></div><div class="shimmer-line bar"></div>' +
     '<div class="shimmer-line"></div><div class="shimmer-line w70"></div></div>';
-  postJSON<Prediction>("/api/predict", { match: m, play })
+  postJSON<Prediction>("/api/predict", { match: m, play, cfg: cfgPayload() })
     .then((p) => { prediction = p; showPrediction(m, p); })
     .catch((e) => showPredError(e));
 }
@@ -507,7 +525,7 @@ async function predictAll(): Promise<void> {
     const m = matches[i];
     btn.textContent = `预测中 ${i + 1}/${total}…`;
     try {
-      const p = await postJSON<Prediction>("/api/predict", { match: m, play });
+      const p = await postJSON<Prediction>("/api/predict", { match: m, play, cfg: cfgPayload() });
       const hasOdds = typeof p.pick_odds === "number" && p.pick !== null && p.pick !== undefined;
       rows.push({
         home: m.home,
@@ -598,7 +616,7 @@ async function sendChat(): Promise<void> {
   renderChat();
 
   try {
-    const res = await postJSON<{ reply: string }>("/api/chat", { messages: chatMsgs.slice(0, -1), matches });
+    const res = await postJSON<{ reply: string }>("/api/chat", { messages: chatMsgs.slice(0, -1), matches, cfg: cfgPayload() });
     chatMsgs[chatMsgs.length - 1] = { role: "assistant", content: res.reply || "" };
     renderChat();
   } catch (e) {
