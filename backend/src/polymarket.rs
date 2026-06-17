@@ -19,7 +19,8 @@ fn translate_team(name: &str) -> String {
         "Germany" => "德国", "Côte d'Ivoire" => "科特迪瓦", "Cote d'Ivoire" => "科特迪瓦",
         "Ivory Coast" => "科特迪瓦", "Belgium" => "比利时", "Iran" => "伊朗",
         "Canada" => "加拿大", "Qatar" => "卡塔尔", "Switzerland" => "瑞士",
-        "Bosnia and Herzegovina" => "波黑", "Bosnia" => "波黑", "Czechia" => "捷克",
+        "Bosnia and Herzegovina" => "波黑", "Bosnia-Herzegovina" => "波黑",
+        "Bosnia" => "波黑", "Czechia" => "捷克",
         "Czech Republic" => "捷克", "South Africa" => "南非", "Spain" => "西班牙",
         "Saudi Arabia" => "沙特阿拉伯", "Argentina" => "阿根廷", "France" => "法国",
         "USA" => "美国", "United States" => "美国", "Japan" => "日本",
@@ -98,7 +99,7 @@ fn yes_price(m: &Value) -> Option<f64> {
     if p > 0.0 { Some(p) } else { None }
 }
 
-fn map_event(e: &Value) -> Option<Match> {
+fn map_event(e: &Value) -> Option<(String, Match)> {
     let slug = e["slug"].as_str().unwrap_or("");
     let date = slug_date(slug)?;
     let title = e["title"].as_str().unwrap_or("");
@@ -114,7 +115,12 @@ fn map_event(e: &Value) -> Option<Match> {
     }
     let id = e["id"].as_str().map(|s| s.to_string())
         .unwrap_or_else(|| slug.to_string());
-    Some(Match {
+    // 真实开赛时间(ISO8601),用于排序;缺失则退回比赛日。
+    let sort_key = e["startTime"].as_str()
+        .or_else(|| e["endDate"].as_str())
+        .unwrap_or(&date)
+        .to_string();
+    let m = Match {
         id,
         league: "世界杯".to_string(),
         home: translate_team(&home),
@@ -122,18 +128,19 @@ fn map_event(e: &Value) -> Option<Match> {
         kickoff: date,
         odds: Odds { home: oh?, draw: od?, away: oa? },
         handicap: None,
-    })
+    };
+    Some((sort_key, m))
 }
 
 pub fn map_events(events: &Value) -> Vec<Match> {
-    let mut out = Vec::new();
-    let Some(arr) = events.as_array() else { return out; };
+    let mut keyed: Vec<(String, Match)> = Vec::new();
+    let Some(arr) = events.as_array() else { return Vec::new(); };
     for e in arr {
-        if let Some(m) = map_event(e) { out.push(m); }
+        if let Some(km) = map_event(e) { keyed.push(km); }
     }
-    // 按比赛日 + 主队稳定排序
-    out.sort_by(|a, b| a.kickoff.cmp(&b.kickoff).then(a.home.cmp(&b.home)));
-    out
+    // 按真实开赛时间升序(同时间按主队稳定排序)
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.home.cmp(&b.1.home)));
+    keyed.into_iter().map(|(_, m)| m).collect()
 }
 
 pub fn available_dates(ms: &[Match]) -> Vec<DateCount> {
@@ -274,6 +281,40 @@ mod tests {
     fn unknown_team_falls_back_to_english() {
         assert_eq!(translate_team("Wakanda"), "Wakanda");
         assert_eq!(translate_team("Brazil"), "巴西");
+    }
+
+    #[test]
+    fn bosnia_hyphenated_translates() {
+        assert_eq!(translate_team("Bosnia-Herzegovina"), "波黑");
+        assert_eq!(translate_team("Bosnia and Herzegovina"), "波黑");
+    }
+
+    #[test]
+    fn sorts_by_start_time_within_day() {
+        // 同一比赛日,两场不同开赛时间;乱序输入应按 startTime 升序排出
+        let late = serde_json::json!({
+            "id": "late", "slug": "fifwc-aaa-bbb-2026-06-17", "title": "AAA vs. BBB",
+            "startTime": "2026-06-17T20:00:00Z",
+            "markets": [
+                { "groupItemTitle": "AAA", "outcomePrices": "[\"0.5\",\"0.5\"]" },
+                { "groupItemTitle": "BBB", "outcomePrices": "[\"0.4\",\"0.6\"]" },
+                { "groupItemTitle": "Draw (AAA vs. BBB)", "outcomePrices": "[\"0.2\",\"0.8\"]" }
+            ]
+        });
+        let early = serde_json::json!({
+            "id": "early", "slug": "fifwc-ccc-ddd-2026-06-17", "title": "CCC vs. DDD",
+            "startTime": "2026-06-17T14:00:00Z",
+            "markets": [
+                { "groupItemTitle": "CCC", "outcomePrices": "[\"0.5\",\"0.5\"]" },
+                { "groupItemTitle": "DDD", "outcomePrices": "[\"0.4\",\"0.6\"]" },
+                { "groupItemTitle": "Draw (CCC vs. DDD)", "outcomePrices": "[\"0.2\",\"0.8\"]" }
+            ]
+        });
+        let ms = map_events(&serde_json::json!([late, early]));
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0].id, "early"); // 14:00 在前
+        assert_eq!(ms[1].id, "late");  // 20:00 在后
+        assert_eq!(ms[0].kickoff, "2026-06-17"); // kickoff 仍为比赛日
     }
 
     #[test]
