@@ -616,8 +616,12 @@ async function sendChat(): Promise<void> {
   renderChat();
 
   try {
-    const res = await postJSON<{ reply: string }>("/api/chat", { messages: chatMsgs.slice(0, -1), matches, cfg: cfgPayload() });
-    chatMsgs[chatMsgs.length - 1] = { role: "assistant", content: res.reply || "" };
+    const res = await postJSON<{ reply: string; steps?: Array<{ tool: string; summary: string }> }>(
+      "/api/chat", { messages: chatMsgs.slice(0, -1), matches, cfg: cfgPayload() });
+    const steps = (res.steps || []).map((s) => `· ${s.tool}:${s.summary}`).join("\n");
+    const reply = res.reply || "";
+    const content = steps ? `🔧 已调用工具\n${steps}\n\n${reply}` : reply;
+    chatMsgs[chatMsgs.length - 1] = { role: "assistant", content };
     renderChat();
   } catch (e) {
     chatMsgs.pop(); // drop the placeholder
