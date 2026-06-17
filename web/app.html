@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>竞彩预测 · 模拟账本</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>竞彩预测 · 模拟账本</h1>
+      <span class="tag">Prediction Terminal</span>
+    </div>
+    <span class="clock num" id="clock">—</span>
+  </header>
+
+  <div class="reminder">
+    <svg class="mk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.5"/></svg>
+    <span>本工具所有金额均为虚拟模拟资金，仅供策略复盘与记录，不涉及任何真实投注。</span>
+  </div>
+
+  <div class="shell">
+
+    <aside class="rail">
+      <section class="panel">
+        <div class="panel-head"><h2>AI 配置</h2><span class="meta">Model</span></div>
+        <div class="field">
+          <label for="baseurl">Base URL</label>
+          <input class="well mono" id="baseurl" type="text" placeholder="https://api.anthropic.com" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="protocol">协议</label>
+          <select class="well" id="protocol">
+            <option value="Anthropic">Claude (Anthropic)</option>
+            <option value="OpenAI">OpenAI</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="modelSel">模型</label>
+          <select class="well mono" id="modelSel"></select>
+          <input class="well mono" id="modelCustom" type="text" placeholder="输入自定义模型名" autocomplete="off" hidden style="margin-top:8px" />
+        </div>
+        <div class="field">
+          <label for="apikey">API Key <span class="hint" id="keyhint" hidden>(已保存)</span></label>
+          <input class="well mono" id="apikey" type="password" placeholder="sk-…" autocomplete="off" />
+          <div class="err" id="keyerr" hidden></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="savekey" style="width:100%">保存配置</button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>粘贴赛事</h2><span class="meta">Input</span></div>
+        <div class="field">
+          <label for="srcSel">数据源</label>
+          <select class="well" id="srcSel">
+            <option value="sporttery">体彩官方</option>
+            <option value="polymarket">Polymarket</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label for="polyDate">按比赛日</label>
+          <div class="well" style="display:flex;align-items:center;gap:8px;padding:8px">
+            <button class="btn btn-ghost btn-sm" id="polyPrev" style="flex:0 0 auto;white-space:nowrap">◀ 前一天</button>
+            <div id="polyDayLabel" style="flex:1;text-align:center;font-size:12px;line-height:1.3">—</div>
+            <button class="btn btn-ghost btn-sm" id="polyNext" style="flex:0 0 auto;white-space:nowrap">后一天 ▶</button>
+          </div>
+          <select class="well" id="polyDate" style="margin-top:8px"></select>
+          <div style="font-size:11px;color:var(--steel);margin-top:6px;letter-spacing:0.02em" id="srcFresh">数据加载中…</div>
+          <div class="err" id="polyerr" hidden></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:var(--steel);font-size:11px;letter-spacing:0.08em;text-transform:uppercase">
+          <span style="flex:1;height:1px;background:var(--hairline)"></span>
+          <span>或手动粘贴</span>
+          <span style="flex:1;height:1px;background:var(--hairline)"></span>
+        </div>
+
+        <div class="field">
+          <label for="paste">赛事与赔率</label>
+          <textarea class="well mono" id="paste" placeholder="周日001|世界杯|英格兰|法国|2026-06-20T19:00:00|2.55|3.30|2.80"></textarea>
+        </div>
+        <div class="field">
+          <label>格式：场次|联赛|主|客|开赛|主赔|平赔|客赔[|让球]（每行一场），亦支持 JSON 数组</label>
+        </div>
+        <div class="err" id="parseerr" hidden></div>
+        <div class="row2">
+          <button class="btn btn-primary" id="parsebtn">解析赛事</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="col">
+
+      <section class="panel">
+        <div class="panel-head"><h2>赛事队列</h2><span class="meta" id="matchcount">0 场</span></div>
+        <div class="matches" id="matches"></div>
+        <div class="led-empty" id="matchesEmpty">粘贴赛事与赔率，解析后将在此排列待预测的比赛。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>预测</h2><span class="meta">Signal</span></div>
+        <div id="predHost">
+          <div class="pred-empty">
+            <p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。概率与建议由后端 AI 模型给出，请先在「AI 配置」中填写服务信息。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>下单计算器</h2><span class="meta">Parlay</span></div>
+        <div class="field">
+          <label>从赛事列表选择 <span class="hint">选赛事 + 结果，自动加为投注腿</span></label>
+          <select class="well" id="calcMatch"></select>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-ghost btn-sm" id="calcPickHome" style="flex:1">加主胜</button>
+            <button class="btn btn-ghost btn-sm" id="calcPickDraw" style="flex:1">加平局</button>
+            <button class="btn btn-ghost btn-sm" id="calcPickAway" style="flex:1">加客胜</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>投注腿 <span class="hint">label @ odds，最多 8 腿</span></label>
+          <div id="calcLegs"></div>
+          <div class="calc-empty" id="calcLegsEmpty">尚未添加投注腿。点击「+ 添加腿」或在预测卡中「加入计算器」。</div>
+          <button class="btn btn-ghost btn-sm" id="calcAddLeg" style="margin-top:8px">+ 添加腿</button>
+        </div>
+        <div class="field">
+          <label>过关方式 <span class="hint">复式可多选</span></label>
+          <div class="calc-ways" id="calcWays"></div>
+        </div>
+        <div class="field" style="max-width:160px">
+          <label for="calcMult">倍数</label>
+          <input class="well mono" id="calcMult" type="number" min="1" step="1" value="1" />
+        </div>
+        <div class="calc-readout">
+          <div class="ro"><div class="l">注数</div><div class="v num" id="calcCount">0</div></div>
+          <div class="ro"><div class="l">投注额</div><div class="v num" id="calcStake">¥0.00</div></div>
+          <div class="ro"><div class="l">最高奖金</div><div class="v num teal" id="calcReturn">¥0.00</div></div>
+        </div>
+        <div class="calc-slip" id="calcSlip" hidden></div>
+        <button class="btn btn-primary" id="calcLogBtn" style="margin-top:14px" disabled>记入账本</button>
+        <div class="err" id="calcErr" hidden></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>账本统计</h2><button class="btn btn-ghost btn-sm" id="clearLedgerBtn">清空账本</button></div>
+        <div class="stats" id="stats">
+          <div class="stat"><div class="l">已结算</div><div class="v num" id="stSettled">0 笔</div></div>
+          <div class="stat"><div class="l">命中率</div><div class="v num draw" id="stHit">—</div></div>
+          <div class="stat"><div class="l">累计盈亏</div><div class="v num draw" id="stPnl">0.00</div></div>
+          <div class="stat"><div class="l">ROI</div><div class="v num draw" id="stRoi">—</div></div>
+        </div>
+        <div class="ledger-wrap" style="margin-top:18px">
+          <table class="ledger" id="ledgerTable" hidden>
+            <thead>
+              <tr>
+                <th>注单</th><th>赛事</th><th>选择</th>
+                <th class="r">赔率</th><th class="r">本金</th><th class="r">盈亏</th>
+                <th>状态</th><th class="r">结算</th>
+              </tr>
+            </thead>
+            <tbody id="ledgerBody"></tbody>
+          </table>
+          <div class="led-empty" id="ledgerEmpty">粘贴赛事 → 预测 → 记一笔，盈亏统计将在结算后出现。</div>
+        </div>
+        <div class="ledger-wrap" style="margin-top:8px">
+          <table class="ledger" id="ticketTable" hidden>
+            <thead>
+              <tr>
+                <th>单号</th><th>腿数/过关</th>
+                <th class="r">倍数</th><th class="r">投注额</th><th class="r">最高奖金</th>
+                <th>状态</th><th class="r">结算</th>
+              </tr>
+            </thead>
+            <tbody id="ticketBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<!-- app logic lives in src/app.ts (typed); Vite bundles it into dist/ -->
+<script type="module" src="/src/app.ts"></script>
+</body>
+</html>
