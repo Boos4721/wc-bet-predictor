@@ -8,3 +8,4 @@ config.local.*
 poly_cache.json
 sporttery_cache.json
 .omc/
+.DS_Store
