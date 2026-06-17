@@ -139,7 +139,7 @@ textarea.well { resize: vertical; min-height: 92px; line-height: 1.6; }
 /* probability bar */
 .prob-wrap { margin: 18px 0 20px; }
 .prob-bar { display: flex; height: 40px; border-radius: 6px; overflow: hidden; background: var(--raised); }
-.prob-seg { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--on-teal); font-weight: 600; min-width: 0; transition: flex-grow 0.5s var(--ease); overflow: hidden; white-space: nowrap; }
+.prob-seg { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--on-teal); font-weight: 600; min-width: 0; overflow: hidden; white-space: nowrap; }
 .prob-seg.pick { background: var(--teal); }
 .prob-seg.rest { background: #CDD5DF; color: var(--steel); }
 .prob-seg .lab { opacity: 0.85; font-weight: 500; }
@@ -163,6 +163,21 @@ textarea.well { resize: vertical; min-height: 92px; line-height: 1.6; }
 .shimmer-line.w70 { width: 70%; } .shimmer-line.w50 { width: 50%; } .shimmer-line.bar { height: 40px; }
 .shimmer-label { font-size: 12px; color: var(--steel); margin-bottom: 16px; letter-spacing: 0.04em; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ---- Motion: data-arrival reveals (transform/opacity/clip-path only, one easing) ---- */
+@keyframes rowIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.match-row.row-in { animation: rowIn 0.34s var(--ease) both; will-change: transform, opacity; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.pred-reveal { animation: cardIn 0.36s var(--ease) both; will-change: transform, opacity; }
+/* probability bar: proportions land instantly via flex-grow; reveal is a
+   compositor-only clip-path wipe — no per-frame layout (gsap-performance). */
+.prob-bar { clip-path: inset(0 100% 0 0); }
+.prob-bar.shown { clip-path: inset(0 0 0 0); transition: clip-path 0.55s var(--ease); will-change: clip-path; }
+@media (prefers-reduced-motion: reduce) {
+  .match-row.row-in, .pred-reveal { animation: none; will-change: auto; }
+  .shimmer-line { animation: none; }
+  .prob-bar, .prob-bar.shown { clip-path: none; transition: none; will-change: auto; }
+}
 
 /* ---- Stats strip ---- */
 .stats { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
@@ -241,13 +256,9 @@ table.ledger .status.pending { color: var(--steel); }
           </select>
         </div>
         <div class="field">
-          <label for="model">模型</label>
-          <input class="well mono" id="model" type="text" list="modellist" placeholder="claude-fable-5" autocomplete="off" />
-          <datalist id="modellist">
-            <option value="claude-fable-5"></option>
-            <option value="claude-opus-4-8"></option>
-            <option value="claude-sonnet-4-6"></option>
-          </datalist>
+          <label for="modelSel">模型</label>
+          <select class="well mono" id="modelSel"></select>
+          <input class="well mono" id="modelCustom" type="text" placeholder="输入自定义模型名" autocomplete="off" hidden style="margin-top:8px" />
         </div>
         <div class="field">
           <label for="apikey">API Key <span class="hint" id="keyhint" hidden>(已保存)</span></label>
@@ -260,6 +271,31 @@ table.ledger .status.pending { color: var(--steel); }
       <section class="panel">
         <div class="panel-head"><h2>粘贴赛事</h2><span class="meta">Input</span></div>
         <div class="field">
+          <label for="srcSel">数据源</label>
+          <select class="well" id="srcSel">
+            <option value="sporttery">体彩官方</option>
+            <option value="polymarket">Polymarket</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label for="polyDate">按比赛日</label>
+          <div class="well" style="display:flex;align-items:center;gap:8px;padding:8px">
+            <button class="btn btn-ghost btn-sm" id="polyPrev" style="flex:0 0 auto;white-space:nowrap">◀ 前一天</button>
+            <div id="polyDayLabel" style="flex:1;text-align:center;font-size:12px;line-height:1.3">—</div>
+            <button class="btn btn-ghost btn-sm" id="polyNext" style="flex:0 0 auto;white-space:nowrap">后一天 ▶</button>
+          </div>
+          <select class="well" id="polyDate" style="margin-top:8px"></select>
+          <div style="font-size:11px;color:var(--steel);margin-top:6px;letter-spacing:0.02em" id="srcFresh">数据加载中…</div>
+          <div class="err" id="polyerr" hidden></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;color:var(--steel);font-size:11px;letter-spacing:0.08em;text-transform:uppercase">
+          <span style="flex:1;height:1px;background:var(--hairline)"></span>
+          <span>或手动粘贴</span>
+          <span style="flex:1;height:1px;background:var(--hairline)"></span>
+        </div>
+
+        <div class="field">
           <label for="paste">赛事与赔率</label>
           <textarea class="well mono" id="paste" placeholder="周日001|世界杯|英格兰|法国|2026-06-20T19:00:00|2.55|3.30|2.80"></textarea>
         </div>
@@ -269,16 +305,6 @@ table.ledger .status.pending { color: var(--steel); }
         <div class="err" id="parseerr" hidden></div>
         <div class="row2">
           <button class="btn btn-primary" id="parsebtn">解析赛事</button>
-        </div>
-        <div class="field" style="margin-top:14px;margin-bottom:0">
-          <label for="polyDate">Polymarket 世界杯 · 按比赛日</label>
-          <div class="well" style="display:flex;align-items:center;gap:8px;padding:8px">
-            <button class="btn btn-ghost btn-sm" id="polyPrev" style="flex:0 0 auto;white-space:nowrap">◀ 前一天</button>
-            <div id="polyDayLabel" style="flex:1;text-align:center;font-size:12px;line-height:1.3">—</div>
-            <button class="btn btn-ghost btn-sm" id="polyNext" style="flex:0 0 auto;white-space:nowrap">后一天 ▶</button>
-          </div>
-          <select class="well" id="polyDate" style="margin-top:8px"></select>
-          <div class="err" id="polyerr" hidden></div>
         </div>
       </section>
     </aside>
@@ -363,11 +389,60 @@ table.ledger .status.pending { color: var(--steel); }
   tick(); setInterval(tick, 1000);
 
   // ---- AI config ----
+  var CUSTOM = '__custom__';
+  var MODEL_PRESETS = {
+    Anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-4-6'],
+    OpenAI: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
+  };
+
+  // Rebuild the model <select> for the active protocol. `keep` is an
+  // optional model value to pre-select (falls back to first preset).
+  function populateModels(keep) {
+    var sel = $('modelSel');
+    var list = MODEL_PRESETS[$('protocol').value] || [];
+    sel.innerHTML = '';
+    list.forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      sel.appendChild(o);
+    });
+    var custom = document.createElement('option');
+    custom.value = CUSTOM; custom.textContent = '自定义…';
+    sel.appendChild(custom);
+
+    if (keep && list.indexOf(keep) === -1) {
+      // remembered model isn't in this protocol's presets → custom mode
+      sel.value = CUSTOM;
+      $('modelCustom').value = keep;
+    } else {
+      sel.value = keep || list[0];
+      $('modelCustom').value = '';
+    }
+    syncCustomVisibility();
+  }
+
+  function syncCustomVisibility() {
+    var isCustom = $('modelSel').value === CUSTOM;
+    var input = $('modelCustom');
+    input.hidden = !isCustom;
+    if (isCustom) input.focus();
+  }
+
+  // resolved model string the rest of the app saves/sends
+  function currentModel() {
+    return $('modelSel').value === CUSTOM
+      ? $('modelCustom').value.trim()
+      : $('modelSel').value;
+  }
+
+  $('protocol').addEventListener('change', function () { populateModels(); });
+  $('modelSel').addEventListener('change', syncCustomVisibility);
+
   function loadConfig() {
     api('/api/config').then(function (c) {
       if (c.base_url) $('baseurl').value = c.base_url;
-      if (c.model) $('model').value = c.model;
       if (c.protocol) $('protocol').value = c.protocol;
+      populateModels(c.model);
       if (c.has_key) { $('keyhint').hidden = false; $('apikey').placeholder = '已保存 · 重新输入以替换'; }
       else { $('keyhint').hidden = true; }
     }).catch(function () { /* config endpoint optional on first boot */ });
@@ -375,7 +450,7 @@ table.ledger .status.pending { color: var(--steel); }
   $('savekey').addEventListener('click', function () {
     $('keyerr').hidden = true;
     var base = $('baseurl').value.trim();
-    var model = $('model').value.trim();
+    var model = currentModel();
     var key = $('apikey').value.trim();
     var protocol = $('protocol').value;
     if (!base || !model || !key) {
@@ -413,7 +488,7 @@ table.ledger .status.pending { color: var(--steel); }
     matches.forEach(function (m) { matchMap[m.id] = m.home + ' vs ' + m.away; });
     selId = matches.length ? matches[0].id : null;
     prediction = null;
-    renderMatches(); renderPredEmpty();
+    renderMatches(true); renderPredEmpty();
   }
 
   // ---- parse matches ----
@@ -435,8 +510,9 @@ table.ledger .status.pending { color: var(--steel); }
       });
   });
 
-  // ---- Polymarket day-by-day pager ----
-  var polyDates = [];  // [{date, count}] ascending from backend
+  // ---- dual-source day-by-day pager (体彩官方 / Polymarket) ----
+  var source = 'sporttery';  // active data source; drives all pager URLs
+  var polyDates = [];  // [{date, count}] ascending from backend for active source
   var polyIdx = 0;     // current index into polyDates
 
   function todayISO() {
@@ -445,12 +521,31 @@ table.ledger .status.pending { color: var(--steel); }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
 
+  // freshness line — strips the '@' prefix off the unix-seconds updated_at
+  function loadStatus() {
+    var fresh = $('srcFresh');
+    if (!fresh) return;
+    fresh.textContent = '数据加载中…';
+    api('/api/matches/' + source + '/status')
+      .then(function (st) {
+        var raw = st && st.updated_at;
+        if (!raw) { fresh.textContent = '数据加载中…'; return; }
+        var secs = parseInt(String(raw).replace(/^@/, ''), 10);
+        if (!(secs > 0)) { fresh.textContent = '数据加载中…'; return; }
+        var d = new Date(secs * 1000);
+        var p = function (n) { return (n < 10 ? '0' : '') + n; };
+        fresh.textContent = '数据更新于 ' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+          ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+      })
+      .catch(function () { /* status is best-effort; leave whatever was shown */ });
+  }
+
   function renderPager() {
     var sel = $('polyDate');
     var prev = $('polyPrev'), next = $('polyNext'), label = $('polyDayLabel');
     if (!polyDates.length) {
-      sel.innerHTML = '<option value="">暂无可用比赛日</option>';
-      label.textContent = '暂无可用比赛日';
+      sel.innerHTML = '<option value="">该数据源暂无比赛日</option>';
+      label.textContent = '该数据源暂无比赛日';
       prev.disabled = true; next.disabled = true;
       return;
     }
@@ -474,8 +569,8 @@ table.ledger .status.pending { color: var(--steel); }
     $('polyerr').hidden = true;
     var date = polyDates[polyIdx].date;
     $('matchcount').textContent = '加载中…';
-    api('/api/matches/polymarket?limit=40&date=' + encodeURIComponent(date))
-      .then(function (list) { setMatches(list); })
+    api('/api/matches/' + source + '?limit=40&date=' + encodeURIComponent(date))
+      .then(function (list) { setMatches(list); loadStatus(); })
       .catch(function (e) {
         $('matchcount').textContent = matches.length + ' 场';
         $('polyerr').textContent = '拉取失败：' + e.message;
@@ -499,12 +594,29 @@ table.ledger .status.pending { color: var(--steel); }
     }
   });
 
-  // ---- load available match-days, then auto-load the first day >= today ----
+  // source toggle — reset pager state and reload the new source's days
+  $('srcSel').addEventListener('change', function () {
+    source = $('srcSel').value;
+    polyDates = []; polyIdx = 0;
+    setMatches([]);
+    renderPager();
+    loadPolyDates();
+    loadStatus();
+  });
+
+  // ---- load available match-days for the active source, then auto-load the
+  // first day >= today (else index 0) ----
   function loadPolyDates() {
-    api('/api/matches/polymarket/dates')
+    $('polyerr').hidden = true;
+    api('/api/matches/' + source + '/dates')
       .then(function (dates) {
         polyDates = dates || [];
-        if (!polyDates.length) { renderPager(); return; }
+        if (!polyDates.length) {
+          renderPager();
+          $('polyerr').textContent = '该数据源暂无比赛日';
+          $('polyerr').hidden = false;
+          return;
+        }
         var today = todayISO();
         polyIdx = 0;
         for (var i = 0; i < polyDates.length; i++) {
@@ -520,17 +632,21 @@ table.ledger .status.pending { color: var(--steel); }
   }
 
   // ---- render match queue ----
-  function renderMatches() {
+  // `animate` true only on data arrival (parse / Polymarket load), not on
+  // selection re-renders — so clicking a row never replays the stagger.
+  function renderMatches(animate) {
     var host = $('matches'); host.innerHTML = '';
     $('matchcount').textContent = matches.length + ' 场';
     $('matchesEmpty').hidden = matches.length > 0;
-    matches.forEach(function (m) {
+    matches.forEach(function (m, i) {
       var row = document.createElement('div');
-      row.className = 'match-row' + (m.id === selId ? ' active' : '');
+      row.className = 'match-row' + (m.id === selId ? ' active' : '') + (animate ? ' row-in' : '');
+      if (animate) { row.style.animationDelay = Math.min(i * 26, 260) + 'ms'; }
+      var leagueTxt = m.league + (m.handicap != null ? ' 让' + m.handicap : '');
       row.innerHTML =
         '<div class="mid mono">' + esc(m.id) + '</div>' +
         '<div><div class="teams">' + esc(m.home) + '<span class="vs">vs</span>' + esc(m.away) + '</div>' +
-          '<div class="league">' + esc(m.league) + '</div></div>' +
+          '<div class="league">' + esc(leagueTxt) + '</div></div>' +
         '<div class="odds mono"><span>主<b>' + oddsTxt(m.odds.home) + '</b></span>' +
           '<span>平<b>' + oddsTxt(m.odds.draw) + '</b></span>' +
           '<span>客<b>' + oddsTxt(m.odds.away) + '</b></span></div>';
@@ -590,12 +706,12 @@ table.ledger .status.pending { color: var(--steel); }
     order.forEach(function (o) {
       var cls = o[0] === p.pick ? 'pick' : 'rest';
       var w = Math.round((o[1] || 0) * 100);
-      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:0" data-grow="' + (o[1] || 0) + '">' +
+      segs += '<div class="prob-seg ' + cls + '" style="flex-grow:' + (o[1] || 0) + '">' +
         '<span class="lab">' + PICK_LABEL[o[0]] + '</span><span class="num">' + w + '%</span></div>';
     });
 
     $('predHost').innerHTML =
-      '<div class="pred-card">' +
+      '<div class="pred-card pred-reveal">' +
         '<div class="pred-title"><span class="t">' + esc(m.home) + ' vs ' + esc(m.away) + '</span><span class="id mono">' + esc(m.id) + '</span></div>' +
         '<div class="pred-league">' + esc(m.league) + ' · 模型 ' + esc(p.model || '') + '</div>' +
         '<div class="prob-wrap"><div class="prob-bar" id="probBar">' + segs + '</div>' +
@@ -615,11 +731,14 @@ table.ledger .status.pending { color: var(--steel); }
         '<div class="err" id="logerr" hidden></div>' +
       '</div>';
 
-    // cascade fill
+    // reveal: clip-path wipe on the whole bar (compositor-only, no layout).
+    // drop will-change once the transition ends so the layer isn't pinned.
     requestAnimationFrame(function () {
       var bar = $('probBar'); if (!bar) return;
-      Array.prototype.forEach.call(bar.children, function (seg) {
-        seg.style.flexGrow = seg.getAttribute('data-grow');
+      bar.classList.add('shown');
+      bar.addEventListener('transitionend', function onEnd() {
+        bar.style.willChange = 'auto';
+        bar.removeEventListener('transitionend', onEnd);
       });
     });
 
@@ -728,8 +847,10 @@ table.ledger .status.pending { color: var(--steel); }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]); }); }
 
   // ---- boot ----
+  populateModels();
   loadConfig();
   loadPolyDates();
+  loadStatus();
   renderMatches(); renderPredEmpty();
   refreshLedger();
 })();
