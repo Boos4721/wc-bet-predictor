@@ -473,7 +473,13 @@ function showPrediction(m: Match, p: Prediction): void {
     });
     el("addCalcBtn").addEventListener("click", () => {
       const label = p.pick_label ? `${m.home} ${p.pick_label}` : `${m.home} vs ${m.away}`;
-      addCalcLeg(label, p.pick_odds as number);
+      const errEl = el("logerr");
+      if (addCalcLeg(label, p.pick_odds as number)) {
+        errEl.hidden = true;
+      } else {
+        errEl.textContent = `最多 ${MAX_LEGS} 条投注腿,请先删除部分腿。`;
+        errEl.hidden = false;
+      }
     });
   }
 }
