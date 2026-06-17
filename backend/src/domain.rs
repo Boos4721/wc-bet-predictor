@@ -21,6 +21,10 @@ pub struct Match {
     pub kickoff: String,
     pub odds: Odds,
     pub handicap: Option<i32>,
+    #[serde(default)]
+    pub hhad_odds: Option<Odds>,   // 让球胜平负赔率(主/平/客),无则 None
+    #[serde(default)]
+    pub hhad_line: Option<i32>,    // 让球数,如 -2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +79,8 @@ mod tests {
             kickoff: "2026-06-20T19:00:00".into(),
             odds: Odds { home: 2.1, draw: 3.2, away: 3.5 },
             handicap: None,
+            hhad_odds: None,
+            hhad_line: None,
         };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["odds"]["home"], 2.1);

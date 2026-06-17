@@ -122,6 +122,8 @@ fn map_event(e: &Value) -> Option<(String, Match)> {
         kickoff: date,
         odds: Odds { home: oh?, draw: od?, away: oa? },
         handicap: None,
+        hhad_odds: None,
+        hhad_line: None,
     };
     Some((sort_key, m))
 }

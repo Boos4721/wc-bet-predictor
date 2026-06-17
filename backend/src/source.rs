@@ -40,6 +40,8 @@ fn parse_pipe(raw: &str) -> Result<Vec<Match>, SourceError> {
             kickoff: f[4].into(),
             odds: Odds { home: num(f[5], "主赔")?, draw: num(f[6], "平赔")?, away: num(f[7], "客赔")? },
             handicap: f.get(8).and_then(|s| s.parse::<i32>().ok()),
+            hhad_odds: None,
+            hhad_line: None,
         });
     }
     if out.is_empty() {

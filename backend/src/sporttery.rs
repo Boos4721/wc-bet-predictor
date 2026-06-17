@@ -23,6 +23,14 @@ fn pool_odds(item: &Value) -> Option<Odds> {
     Some(Odds { home, draw, away })
 }
 
+/// 解析让球数字符串("-2.00" → Some(-2));空或非数返回 None。
+fn parse_handicap(v: &Value) -> Option<i32> {
+    let s = v.as_str()?.trim();
+    if s.is_empty() { return None; }
+    let f: f64 = s.parse().ok()?;
+    Some(f as i32)
+}
+
 /// 纯映射:读取根 JSON 的 value.matchInfoList,每场子赛事产出一行(HAD 胜平负)。
 pub fn map_matches(value: &Value) -> Vec<Match> {
     let mut keyed: Vec<((String, String, String), Match)> = Vec::new();
@@ -41,6 +49,10 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
 
             // 仅 HAD 行(胜平负);体彩不展示让球盘。
             if let Some(odds) = find_pool(&odds_list, "HAD").and_then(pool_odds) {
+                // 同场的 HHAD(让球胜平负)若有效,附在同一行上(不另起让球行)。
+                let hhad = find_pool(&odds_list, "HHAD");
+                let hhad_odds = hhad.and_then(pool_odds);
+                let hhad_line = hhad.and_then(|p| parse_handicap(&p["goalLine"]));
                 let m = Match {
                     id: num.clone(),
                     league: league.clone(),
@@ -49,6 +61,8 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
                     kickoff: kickoff.clone(),
                     odds,
                     handicap: None,
+                    hhad_odds,
+                    hhad_line,
                 };
                 keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
             }
@@ -122,6 +136,16 @@ mod tests {
         assert_eq!(had.kickoff, "2026-06-17"); assert_eq!(had.handicap, None);
         assert!((had.odds.home - 1.13).abs() < 1e-9);
         assert!((had.odds.away - 13.50).abs() < 1e-9);
+        // 同一行附带 HHAD 让球赔率与让球数(不另起让球行)
+        let hh = had.hhad_odds.as_ref().expect("应有 HHAD 赔率");
+        assert!((hh.home - 2.54).abs() < 1e-9);
+        assert!((hh.draw - 4.00).abs() < 1e-9);
+        assert!((hh.away - 2.06).abs() < 1e-9);
+        assert_eq!(had.hhad_line, Some(-2));
+        // 英格兰行无 HHAD 池 → hhad 字段为 None
+        let eng = ms.iter().find(|m| m.id == "周三011").unwrap();
+        assert!(eng.hhad_odds.is_none());
+        assert!(eng.hhad_line.is_none());
         // 不应有让球行
         assert!(ms.iter().all(|m| !m.id.contains("让")));
         assert!(ms.iter().all(|m| m.handicap.is_none()));

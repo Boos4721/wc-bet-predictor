@@ -1,5 +1,5 @@
 use crate::config;
-use crate::domain::{Match, Outcome};
+use crate::domain::Outcome;
 use crate::ledger::Store;
 use crate::predictor::{self, ApiConfig};
 use crate::source::{MatchSource, PasteSource};
@@ -83,12 +83,20 @@ async fn sporttery_status(State(s): State<AppState>) -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "updated_at": s.sporttery.updated(), "count": s.sporttery.len() }))).into_response()
 }
 
-async fn predict(State(s): State<AppState>, Json(m): Json<Match>) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct PredictIn {
+    #[serde(rename = "match")]
+    m: crate::domain::Match,
+    #[serde(default)]
+    play: crate::predictor::Play,
+}
+
+async fn predict(State(s): State<AppState>, Json(b): Json<PredictIn>) -> impl IntoResponse {
     let cfg = { s.cfg.lock().unwrap().clone() };
     let Some(cfg) = cfg else {
         return err(StatusCode::BAD_REQUEST, "未配置 AI,请先在配置区填写").into_response();
     };
-    match predictor::predict(&cfg, &m).await {
+    match predictor::predict_play(&cfg, &b.m, b.play).await {
         Ok(p) => (StatusCode::OK, Json(json!(p))).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }

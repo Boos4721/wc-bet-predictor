@@ -64,8 +64,8 @@ async fn predict_without_config_is_400() {
     let app = app();
     let resp = app.oneshot(Request::post("/api/predict")
         .header("content-type","application/json")
-        .body(Body::from(r#"{"id":"m","league":"l","home":"A","away":"B",
-            "kickoff":"t","odds":{"home":2.0,"draw":3.0,"away":3.0},"handicap":null}"#)).unwrap())
+        .body(Body::from(r#"{"match":{"id":"m","league":"l","home":"A","away":"B",
+            "kickoff":"t","odds":{"home":2.0,"draw":3.0,"away":3.0},"handicap":null},"play":"HAD"}"#)).unwrap())
         .await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
