@@ -10,3 +10,6 @@ sporttery_cache.json
 .omc/
 .DS_Store
 dist-package/
+.codegraph/
+.od-skills/
+*.artifact.json
