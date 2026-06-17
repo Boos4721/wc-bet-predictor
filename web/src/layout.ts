@@ -105,8 +105,6 @@ export const LAYOUT = `
             <p>从左侧粘贴赛事并解析，选中一场比赛后点击「预测」。概率与建议由后端 AI 模型给出，请先在「AI 配置」中填写服务信息。</p>
           </div>
         </div>
-          </div>
-        </div>
       </section>
 
       <section class="panel">
@@ -194,5 +192,6 @@ export const LAYOUT = `
       </section>
     </aside>
 
+  </div>
 </div>
 `;
