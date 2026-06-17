@@ -58,6 +58,21 @@ pub struct Bet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ticket {
+    pub id: i64,
+    pub legs: String,        // JSON: [{"label":"英格兰 主胜","odds":1.8}, ...]
+    pub ways: String,        // JSON: [2,3]  (选择的 k串1 的 k 值集合)
+    pub multiplier: i64,
+    pub bet_count: i64,      // 注数
+    pub stake: f64,          // 投注额 = bet_count*2*multiplier
+    pub max_return: f64,     // 全中最高奖金
+    pub status: BetStatus,   // Pending/Won/Lost
+    pub payout: f64,         // 结算后实际奖金(未结算为0)
+    pub created_at: String,
+    pub settled_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settlement {
     pub bet_id: i64,
     pub actual_result: Outcome,

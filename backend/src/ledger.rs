@@ -37,7 +37,7 @@ pub fn compute_stats(rows: &[SettledRow]) -> Stats {
     }
 }
 
-use crate::domain::{Bet, BetStatus, Settlement};
+use crate::domain::{Bet, BetStatus, Settlement, Ticket};
 use rusqlite::Connection;
 use std::sync::Mutex;
 
@@ -75,6 +75,15 @@ impl Store {
                 payout REAL NOT NULL,
                 pnl REAL NOT NULL,
                 settled_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tickets(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                legs TEXT NOT NULL, ways TEXT NOT NULL,
+                multiplier INTEGER NOT NULL, bet_count INTEGER NOT NULL,
+                stake REAL NOT NULL, max_return REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Pending',
+                payout REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, settled_at TEXT
             );",
         )?;
         Ok(Store { conn: Mutex::new(conn) })
@@ -132,14 +141,65 @@ impl Store {
         Ok(Settlement { bet_id, actual_result: actual, payout, pnl, settled_at: settled_at.into() })
     }
 
+    pub fn insert_ticket(&self, legs: &str, ways: &str, multiplier: i64, bet_count: i64,
+        stake: f64, max_return: f64, created_at: &str) -> rusqlite::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tickets(legs,ways,multiplier,bet_count,stake,max_return,status,payout,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,'Pending',0,?7)",
+            rusqlite::params![legs, ways, multiplier, bet_count, stake, max_return, created_at],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_tickets(&self) -> rusqlite::Result<Vec<Ticket>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id,legs,ways,multiplier,bet_count,stake,max_return,status,payout,created_at,settled_at
+             FROM tickets ORDER BY id DESC")?;
+        let rows = stmt.query_map([], |row| Ok(Ticket {
+            id: row.get(0)?, legs: row.get(1)?, ways: row.get(2)?,
+            multiplier: row.get(3)?, bet_count: row.get(4)?,
+            stake: row.get(5)?, max_return: row.get(6)?,
+            status: status_from(&row.get::<_, String>(7)?),
+            payout: row.get(8)?, created_at: row.get(9)?, settled_at: row.get(10)?,
+        }))?.collect::<Result<Vec<_>,_>>()?;
+        Ok(rows)
+    }
+
+    pub fn settle_ticket(&self, id: i64, payout: f64, settled_at: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let new_status = if payout > 0.0 { BetStatus::Won } else { BetStatus::Lost };
+        conn.execute(
+            "UPDATE tickets SET status=?1, payout=?2, settled_at=?3 WHERE id=?4",
+            rusqlite::params![status_str(new_status), payout, settled_at, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_all(&self) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("DELETE FROM settlements; DELETE FROM bets; DELETE FROM tickets;")?;
+        Ok(())
+    }
+
     pub fn stats(&self) -> rusqlite::Result<Stats> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT b.stake, s.pnl, b.status FROM settlements s JOIN bets b ON b.id=s.bet_id")?;
-        let rows = stmt.query_map([], |r| Ok(SettledRow {
+        let mut rows = stmt.query_map([], |r| Ok(SettledRow {
             stake: r.get(0)?, pnl: r.get(1)?,
             won: r.get::<_, String>(2)? == "Won",
         }))?.collect::<Result<Vec<_>,_>>()?;
+        let mut tstmt = conn.prepare(
+            "SELECT stake, payout, status FROM tickets WHERE status != 'Pending'")?;
+        let trows = tstmt.query_map([], |r| {
+            let stake: f64 = r.get(0)?;
+            let payout: f64 = r.get(1)?;
+            let status: String = r.get(2)?;
+            Ok(SettledRow { stake, pnl: payout - stake, won: status == "Won" })
+        })?.collect::<Result<Vec<_>,_>>()?;
+        rows.extend(trows);
         Ok(compute_stats(&rows))
     }
 }
@@ -210,5 +270,39 @@ mod tests {
         assert!((stats.total_pnl - 110.0).abs() < 1e-9);
         let won = s.list_bets(Some(BetStatus::Won)).unwrap();
         assert_eq!(won.len(), 1);
+    }
+
+    #[test]
+    fn ticket_insert_list_settle() {
+        let s = mem_store();
+        let id = s.insert_ticket("[]", "[2]", 1, 3, 6.0, 50.0, "2026-06-16T10:00:00").unwrap();
+        let tickets = s.list_tickets().unwrap();
+        assert_eq!(tickets.len(), 1);
+        assert!(matches!(tickets[0].status, BetStatus::Pending));
+        assert_eq!(tickets[0].payout, 0.0);
+
+        s.settle_ticket(id, 50.0, "2026-06-21T10:00:00").unwrap();
+        let tickets = s.list_tickets().unwrap();
+        assert!(matches!(tickets[0].status, BetStatus::Won));
+        assert!((tickets[0].payout - 50.0).abs() < 1e-9);
+
+        let stats = s.stats().unwrap();
+        assert_eq!(stats.settled, 1);
+        assert!((stats.total_pnl - 44.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clear_all_zeroes_stats() {
+        let s = mem_store();
+        let bet_id = s.insert_bet("周日001", Outcome::Home, 100.0, 2.1, "2026-06-16T10:00:00").unwrap();
+        s.settle(bet_id, Outcome::Home, "2026-06-21T10:00:00").unwrap();
+        let tid = s.insert_ticket("[]", "[2]", 1, 3, 6.0, 50.0, "2026-06-16T10:00:00").unwrap();
+        s.settle_ticket(tid, 50.0, "2026-06-21T10:00:00").unwrap();
+        assert_eq!(s.stats().unwrap().settled, 2);
+
+        s.clear_all().unwrap();
+        assert_eq!(s.list_bets(None).unwrap().len(), 0);
+        assert_eq!(s.list_tickets().unwrap().len(), 0);
+        assert_eq!(s.stats().unwrap().settled, 0);
     }
 }

@@ -29,6 +29,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/predict", post(predict))
         .route("/api/bets", get(list_bets).post(place_bet))
         .route("/api/settle", post(settle))
+        .route("/api/tickets", get(list_tickets).post(place_ticket))
+        .route("/api/tickets/settle", post(settle_ticket))
+        .route("/api/ledger/clear", post(clear_ledger))
         .route("/api/stats", get(stats))
         .route("/api/config", get(get_config).post(set_config))
         .with_state(state)
@@ -137,6 +140,44 @@ async fn settle(State(s): State<AppState>, Json(b): Json<SettleIn>) -> impl Into
     let now = predictor::now_iso();
     match s.store.settle(b.bet_id, b.actual_result, &now) {
         Ok(st) => (StatusCode::OK, Json(json!(st))).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct TicketIn { legs: serde_json::Value, ways: serde_json::Value, multiplier: i64, bet_count: i64, stake: f64, max_return: f64 }
+
+async fn place_ticket(State(s): State<AppState>, Json(b): Json<TicketIn>) -> impl IntoResponse {
+    let now = predictor::now_iso();
+    let legs = b.legs.to_string();
+    let ways = b.ways.to_string();
+    match s.store.insert_ticket(&legs, &ways, b.multiplier, b.bet_count, b.stake, b.max_return, &now) {
+        Ok(id) => (StatusCode::OK, Json(json!({"id": id}))).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_tickets(State(s): State<AppState>) -> impl IntoResponse {
+    match s.store.list_tickets() {
+        Ok(t) => (StatusCode::OK, Json(json!(t))).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SettleTicketIn { id: i64, payout: f64 }
+
+async fn settle_ticket(State(s): State<AppState>, Json(b): Json<SettleTicketIn>) -> impl IntoResponse {
+    let now = predictor::now_iso();
+    match s.store.settle_ticket(b.id, b.payout, &now) {
+        Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn clear_ledger(State(s): State<AppState>) -> impl IntoResponse {
+    match s.store.clear_all() {
+        Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
