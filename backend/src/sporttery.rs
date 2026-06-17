@@ -23,14 +23,7 @@ fn pool_odds(item: &Value) -> Option<Odds> {
     Some(Odds { home, draw, away })
 }
 
-/// 让球盘口:"-2.00" → Some(-2);空/不可解析 → None。
-fn parse_handicap(v: &Value) -> Option<i32> {
-    let s = v.as_str()?;
-    let f: f64 = s.trim().parse().ok()?;
-    Some(f.round() as i32)
-}
-
-/// 纯映射:读取根 JSON 的 value.matchInfoList,每场子赛事产出至多两行(HAD + HHAD)。
+/// 纯映射:读取根 JSON 的 value.matchInfoList,每场子赛事产出一行(HAD 胜平负)。
 pub fn map_matches(value: &Value) -> Vec<Match> {
     let mut keyed: Vec<((String, String, String), Match)> = Vec::new();
     let Some(infos) = value["value"]["matchInfoList"].as_array() else { return Vec::new(); };
@@ -46,7 +39,7 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
             let match_time = sm["matchTime"].as_str().unwrap_or("").to_string();
             let odds_list = sm["oddsList"].as_array().cloned().unwrap_or_default();
 
-            // HAD 行(胜平负)
+            // 仅 HAD 行(胜平负);体彩不展示让球盘。
             if let Some(odds) = find_pool(&odds_list, "HAD").and_then(pool_odds) {
                 let m = Match {
                     id: num.clone(),
@@ -58,21 +51,6 @@ pub fn map_matches(value: &Value) -> Vec<Match> {
                     handicap: None,
                 };
                 keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
-            }
-            // HHAD 行(让球胜平负)
-            if let Some(item) = find_pool(&odds_list, "HHAD") {
-                if let Some(odds) = pool_odds(item) {
-                    let m = Match {
-                        id: format!("{num}让"),
-                        league: format!("{league}·让球"),
-                        home: home.clone(),
-                        away: away.clone(),
-                        kickoff: kickoff.clone(),
-                        odds,
-                        handicap: parse_handicap(&item["goalLine"]),
-                    };
-                    keyed.push(((match_date.clone(), match_time.clone(), m.id.clone()), m));
-                }
             }
         }
     }
@@ -132,28 +110,27 @@ mod tests {
     }
 
     #[test]
-    fn maps_had_and_hhad_rows() {
+    fn maps_had_only_no_handicap_rows() {
         let ms = map_matches(&root());
-        // 葡萄牙场: HAD + HHAD = 2 rows; 英格兰场: HAD only = 1 row → total 3
-        assert_eq!(ms.len(), 3);
-        // chronological: 英格兰 20:00 on 06-17 before 葡萄牙 01:00 on 06-18
+        // 每场仅 HAD 一行,不产出让球行 → 共 2 行
+        assert_eq!(ms.len(), 2);
+        // 时间升序:英格兰 06-17 20:00 在 葡萄牙 06-18 01:00 之前
         assert_eq!(ms[0].home, "英格兰");
-        // find the 葡萄牙 HAD row
+        // 葡萄牙 HAD 行
         let had = ms.iter().find(|m| m.id == "周三021").unwrap();
         assert_eq!(had.home, "葡萄牙"); assert_eq!(had.away, "刚果(金)");
         assert_eq!(had.kickoff, "2026-06-17"); assert_eq!(had.handicap, None);
         assert!((had.odds.home - 1.13).abs() < 1e-9);
         assert!((had.odds.away - 13.50).abs() < 1e-9);
-        // 葡萄牙 HHAD row
-        let hh = ms.iter().find(|m| m.id == "周三021让").unwrap();
-        assert_eq!(hh.handicap, Some(-2));
-        assert!((hh.odds.home - 2.54).abs() < 1e-9);
-        assert!(hh.league.contains("让球"));
+        // 不应有让球行
+        assert!(ms.iter().all(|m| !m.id.contains("让")));
+        assert!(ms.iter().all(|m| m.handicap.is_none()));
+        assert!(ms.iter().all(|m| !m.league.contains("让球")));
     }
 
     #[test]
     fn skips_pool_with_empty_odds() {
-        // CRS has empty h/d/a → never produces a row; only HAD/HHAD do
+        // CRS/HHAD 不产出 HAD 行;只 HAD 有效
         let ms = map_matches(&root());
         assert!(ms.iter().all(|m| !m.id.contains("CRS")));
     }
