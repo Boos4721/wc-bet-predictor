@@ -2,7 +2,6 @@ use crate::config;
 use crate::domain::{Match, Outcome};
 use crate::ledger::Store;
 use crate::predictor::{self, ApiConfig};
-use crate::polymarket;
 use crate::source::{MatchSource, PasteSource};
 use axum::{extract::{Query, State}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde::Deserialize;
@@ -14,6 +13,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub cfg: Arc<Mutex<Option<ApiConfig>>>,
     pub cfg_path: String,
+    pub poly: std::sync::Arc<crate::polymarket::PolyCache>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -21,6 +21,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/matches", post(parse_matches))
         .route("/api/matches/polymarket", get(polymarket_matches))
         .route("/api/matches/polymarket/dates", get(polymarket_dates))
+        .route("/api/matches/polymarket/status", get(polymarket_status))
         .route("/api/predict", post(predict))
         .route("/api/bets", get(list_bets).post(place_bet))
         .route("/api/settle", post(settle))
@@ -46,19 +47,20 @@ async fn parse_matches(Json(b): Json<RawIn>) -> impl IntoResponse {
 #[derive(Deserialize)]
 struct PolyQuery { date: Option<String>, limit: Option<usize> }
 
-async fn polymarket_matches(Query(q): Query<PolyQuery>) -> impl IntoResponse {
+async fn polymarket_matches(State(s): State<AppState>, Query(q): Query<PolyQuery>) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(40).min(200);
-    match polymarket::fetch_matches(q.date.as_deref(), limit).await {
-        Ok(ms) => (StatusCode::OK, Json(json!(ms))).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e).into_response(),
-    }
+    let mut ms = s.poly.snapshot();
+    if let Some(d) = q.date.as_deref() { ms.retain(|m| m.kickoff == d); }
+    ms.truncate(limit);
+    (StatusCode::OK, Json(json!(ms))).into_response()
 }
 
-async fn polymarket_dates() -> impl IntoResponse {
-    match polymarket::fetch_dates().await {
-        Ok(d) => (StatusCode::OK, Json(json!(d))).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e).into_response(),
-    }
+async fn polymarket_dates(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!(crate::polymarket::available_dates(&s.poly.snapshot())))).into_response()
+}
+
+async fn polymarket_status(State(s): State<AppState>) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({ "updated_at": s.poly.updated(), "count": s.poly.len() }))).into_response()
 }
 
 async fn predict(State(s): State<AppState>, Json(m): Json<Match>) -> impl IntoResponse {

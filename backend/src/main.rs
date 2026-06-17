@@ -18,10 +18,23 @@ async fn main() {
     let cfg_path = config::default_path();
     let cfg = config::load(&cfg_path).unwrap_or(None);
 
+    let poly = std::sync::Arc::new(polymarket::PolyCache::new("poly_cache.json"));
+    poly.load_disk();
+    {
+        let p = poly.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = p.refresh().await { eprintln!("polymarket refresh failed: {e}"); }
+                tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+            }
+        });
+    }
+
     let state = AppState {
         store: Arc::new(store),
         cfg: Arc::new(Mutex::new(cfg)),
         cfg_path,
+        poly,
     };
 
     let app = api::router(state)

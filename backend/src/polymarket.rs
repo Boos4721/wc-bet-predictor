@@ -2,9 +2,44 @@ use crate::domain::{Match, Odds};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::RwLock;
 
 const SERIES_URL: &str =
     "https://gamma-api.polymarket.com/events?closed=false&series_id=11433";
+
+/// 英文国家队名 → 中文。未收录的原样返回(不臆造)。
+fn translate_team(name: &str) -> String {
+    match name {
+        "England" => "英格兰", "Croatia" => "克罗地亚", "Ghana" => "加纳",
+        "Panama" => "巴拿马", "Portugal" => "葡萄牙", "DR Congo" => "刚果（金）",
+        "Uzbekistan" => "乌兹别克斯坦", "Colombia" => "哥伦比亚", "Brazil" => "巴西",
+        "Haiti" => "海地", "Mexico" => "墨西哥", "Korea Republic" => "韩国",
+        "South Korea" => "韩国", "Netherlands" => "荷兰", "Sweden" => "瑞典",
+        "New Zealand" => "新西兰", "Egypt" => "埃及", "Ecuador" => "厄瓜多尔",
+        "Germany" => "德国", "Côte d'Ivoire" => "科特迪瓦", "Cote d'Ivoire" => "科特迪瓦",
+        "Ivory Coast" => "科特迪瓦", "Belgium" => "比利时", "Iran" => "伊朗",
+        "Canada" => "加拿大", "Qatar" => "卡塔尔", "Switzerland" => "瑞士",
+        "Bosnia and Herzegovina" => "波黑", "Bosnia" => "波黑", "Czechia" => "捷克",
+        "Czech Republic" => "捷克", "South Africa" => "南非", "Spain" => "西班牙",
+        "Saudi Arabia" => "沙特阿拉伯", "Argentina" => "阿根廷", "France" => "法国",
+        "USA" => "美国", "United States" => "美国", "Japan" => "日本",
+        "Australia" => "澳大利亚", "Senegal" => "塞内加尔", "Morocco" => "摩洛哥",
+        "Nigeria" => "尼日利亚", "Cameroon" => "喀麦隆", "Uruguay" => "乌拉圭",
+        "Denmark" => "丹麦", "Poland" => "波兰", "Serbia" => "塞尔维亚",
+        "Italy" => "意大利", "Wales" => "威尔士", "Scotland" => "苏格兰",
+        "Norway" => "挪威", "Austria" => "奥地利", "Turkey" => "土耳其",
+        "Türkiye" => "土耳其", "Greece" => "希腊", "Peru" => "秘鲁",
+        "Chile" => "智利", "Paraguay" => "巴拉圭", "Venezuela" => "委内瑞拉",
+        "Costa Rica" => "哥斯达黎加", "Jamaica" => "牙买加", "Honduras" => "洪都拉斯",
+        "Algeria" => "阿尔及利亚", "Tunisia" => "突尼斯", "Mali" => "马里",
+        "Ukraine" => "乌克兰", "Slovenia" => "斯洛文尼亚", "Slovakia" => "斯洛伐克",
+        "Hungary" => "匈牙利", "Romania" => "罗马尼亚", "China" => "中国",
+        "Iraq" => "伊拉克", "United Arab Emirates" => "阿联酋", "UAE" => "阿联酋",
+        "Jordan" => "约旦", "Oman" => "阿曼", "Cape Verde" => "佛得角",
+        "Curaçao" => "库拉索", "Curacao" => "库拉索", "Panama " => "巴拿马",
+        other => other,
+    }.to_string()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DateCount { pub date: String, pub count: usize }
@@ -29,21 +64,6 @@ async fn fetch_events() -> Result<Value, String> {
         offset += 100;
     }
     Ok(Value::Array(all))
-}
-
-pub async fn fetch_matches(date: Option<&str>, limit: usize) -> Result<Vec<Match>, String> {
-    let events = fetch_events().await?;
-    let mut ms = map_events(&events);
-    if let Some(d) = date {
-        ms.retain(|m| m.kickoff == d);
-    }
-    ms.truncate(limit);
-    Ok(ms)
-}
-
-pub async fn fetch_dates() -> Result<Vec<DateCount>, String> {
-    let events = fetch_events().await?;
-    Ok(available_dates(&map_events(&events)))
 }
 
 /// 取 slug 末尾的 YYYY-MM-DD(形如 fifwc-eng-hrv-2026-06-17)
@@ -97,7 +117,8 @@ fn map_event(e: &Value) -> Option<Match> {
     Some(Match {
         id,
         league: "世界杯".to_string(),
-        home, away,
+        home: translate_team(&home),
+        away: translate_team(&away),
         kickoff: date,
         odds: Odds { home: oh?, draw: od?, away: oa? },
         handicap: None,
@@ -125,6 +146,50 @@ pub fn available_dates(ms: &[Match]) -> Vec<DateCount> {
     map.into_iter().map(|(date, count)| DateCount { date, count }).collect()
 }
 
+pub struct PolyCache {
+    matches: RwLock<Vec<Match>>,
+    updated: RwLock<Option<String>>,
+    path: String,
+}
+
+impl PolyCache {
+    pub fn new(path: &str) -> Self {
+        PolyCache { matches: RwLock::new(Vec::new()), updated: RwLock::new(None), path: path.to_string() }
+    }
+
+    /// 冷启动:若磁盘快照存在则载入内存(不联网)。
+    pub fn load_disk(&self) {
+        if let Ok(s) = std::fs::read_to_string(&self.path) {
+            if let Ok(ms) = serde_json::from_str::<Vec<Match>>(&s) {
+                *self.matches.write().unwrap() = ms;
+            }
+        }
+    }
+
+    /// 联网刷新:抓取→映射→换入内存→写磁盘。返回条数。
+    pub async fn refresh(&self) -> Result<usize, String> {
+        let events = fetch_events().await?;       // network await — NO lock held
+        let ms = map_events(&events);
+        let n = ms.len();
+        if let Ok(s) = serde_json::to_string(&ms) {
+            let _ = std::fs::write(&self.path, s);  // best-effort disk snapshot
+        }
+        *self.matches.write().unwrap() = ms;
+        *self.updated.write().unwrap() = Some(now_stamp());
+        Ok(n)
+    }
+
+    pub fn snapshot(&self) -> Vec<Match> { self.matches.read().unwrap().clone() }
+    pub fn updated(&self) -> Option<String> { self.updated.read().unwrap().clone() }
+    pub fn len(&self) -> usize { self.matches.read().unwrap().len() }
+}
+
+fn now_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("@{secs}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,8 +212,8 @@ mod tests {
         let ms = map_events(&serde_json::json!([sample_event()]));
         assert_eq!(ms.len(), 1);
         let m = &ms[0];
-        assert_eq!(m.home, "England");
-        assert_eq!(m.away, "Croatia");
+        assert_eq!(m.home, "英格兰");
+        assert_eq!(m.away, "克罗地亚");
         assert_eq!(m.kickoff, "2026-06-17");
         assert!((m.odds.home - 1.0/0.565).abs() < 1e-6);
         assert!((m.odds.draw - 1.0/0.255).abs() < 1e-6);
@@ -203,5 +268,18 @@ mod tests {
     #[test]
     fn empty_input_yields_empty() {
         assert_eq!(map_events(&serde_json::json!([])).len(), 0);
+    }
+
+    #[test]
+    fn unknown_team_falls_back_to_english() {
+        assert_eq!(translate_team("Wakanda"), "Wakanda");
+        assert_eq!(translate_team("Brazil"), "巴西");
+    }
+
+    #[test]
+    fn cache_snapshot_empty_then_loads_nothing_when_no_disk() {
+        let c = PolyCache::new("/tmp/wcbp-nonexistent-cache-xyz.json");
+        c.load_disk();
+        assert_eq!(c.snapshot().len(), 0);
     }
 }

@@ -5,4 +5,5 @@ dist/
 *.sqlite
 config.local.*
 .env
+poly_cache.json
 .omc/
