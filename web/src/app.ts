@@ -4,7 +4,7 @@ import "./app.css";
 import type {
   Match, Prediction, ProbOption, Bet, Stats, AiConfig,
   DayCount, SourceStatus, Pick, SettleResult, SourceId,
-  CalcLeg, Ticket,
+  CalcLeg, Ticket, ChatMsg,
 } from "./types";
 
 // ---- typed DOM helpers ----
@@ -484,6 +484,118 @@ function showPrediction(m: Match, p: Prediction): void {
   }
 }
 
+// ---- batch predict — run every queued match through /api/predict with the
+// CURRENT play, sequentially (avoid hammering the AI / rate limits). ----
+interface BatchRow { home: string; away: string; pickLabel: string; conf: number; oddsTxt: string; }
+
+async function predictAll(): Promise<void> {
+  const btn = el<HTMLButtonElement>("predictAllBtn");
+  const host = el("predHost");
+  if (!matches.length) {
+    host.innerHTML = '<div class="pred-empty"><p>请先加载今天的赛事。</p></div>';
+    return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  const total = matches.length;
+  const rows: BatchRow[] = [];
+  for (let i = 0; i < total; i++) {
+    const m = matches[i];
+    btn.textContent = `预测中 ${i + 1}/${total}…`;
+    try {
+      const p = await postJSON<Prediction>("/api/predict", { match: m, play });
+      const hasOdds = typeof p.pick_odds === "number" && p.pick !== null && p.pick !== undefined;
+      rows.push({
+        home: m.home,
+        away: m.away,
+        pickLabel: p.pick_label || "—",
+        conf: (p.confidence || 0) * 100,
+        oddsTxt: hasOdds ? (p.pick_odds as number).toFixed(2) : "—",
+      });
+    } catch (e) {
+      const msg = /未配置|HTTP 400/.test((e as Error).message)
+        ? "请先在 AI 配置 填写后再预测。"
+        : "预测失败：" + (e as Error).message;
+      renderBatchResults(rows, msg);
+      btn.disabled = false;
+      btn.textContent = orig;
+      return;
+    }
+  }
+  renderBatchResults(rows, null);
+  btn.disabled = false;
+  btn.textContent = orig;
+}
+
+function renderBatchResults(rows: BatchRow[], err: string | null): void {
+  const sorted = rows.slice().sort((a, b) => b.conf - a.conf);
+  const body = sorted.map((r) =>
+    '<tr>' +
+      `<td><span class="led-team">${esc(r.home)} vs ${esc(r.away)}</span></td>` +
+      `<td><span class="led-pick">${esc(r.pickLabel)}</span></td>` +
+      `<td class="r num">${r.conf.toFixed(1)}%</td>` +
+      `<td class="r num">${esc(r.oddsTxt)}</td>` +
+    '</tr>').join("");
+  const table = sorted.length
+    ? '<table class="ledger"><thead><tr><th>赛事</th><th>推荐</th>' +
+      '<th class="r">置信</th><th class="r">赔率</th></tr></thead>' +
+      `<tbody>${body}</tbody></table>`
+    : "";
+  const errBox = err ? `<div class="err" style="margin-bottom:12px">${esc(err)}</div>` : "";
+  el("predHost").innerHTML = '<div class="pred-card">' + errBox + table + '</div>';
+}
+
+// ---- chat agent — today's matches as context ----
+let chatMsgs: ChatMsg[] = [];
+
+function renderChat(): void {
+  const log = el("chatLog");
+  log.innerHTML = chatMsgs.map((m) => {
+    const isUser = m.role === "user";
+    const align = isUser ? "flex-end" : "flex-start";
+    const bg = isUser ? "var(--teal-dim)" : "var(--raised)";
+    const color = isUser ? "var(--teal-text)" : "var(--ink)";
+    return `<div style="align-self:${align};max-width:82%;background:${bg};color:${color};` +
+      `border:1px solid var(--hairline);border-radius:10px;padding:9px 12px;font-size:13px;` +
+      `line-height:1.55;white-space:pre-wrap;word-break:break-word">${esc(m.content)}</div>`;
+  }).join("");
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat(): Promise<void> {
+  const input = el<HTMLTextAreaElement>("chatInput");
+  const sendBtn = el<HTMLButtonElement>("chatSend");
+  const errBox = el("chatErr");
+  const content = input.value.trim();
+  if (!content) return;
+  errBox.hidden = true;
+  chatMsgs.push({ role: "user", content });
+  renderChat();
+  input.value = "";
+  sendBtn.disabled = true;
+
+  // transient placeholder while the model thinks
+  const placeholder: ChatMsg = { role: "assistant", content: "思考中…" };
+  chatMsgs.push(placeholder);
+  renderChat();
+
+  try {
+    const res = await postJSON<{ reply: string }>("/api/chat", { messages: chatMsgs.slice(0, -1), matches });
+    chatMsgs[chatMsgs.length - 1] = { role: "assistant", content: res.reply || "" };
+    renderChat();
+  } catch (e) {
+    chatMsgs.pop(); // drop the placeholder
+    renderChat();
+    const msg = /未配置|HTTP 400/.test((e as Error).message)
+      ? "尚未配置 AI 模型，请先在左上「AI 配置」中填写 Base URL、模型与 API Key。"
+      : "对话失败：" + (e as Error).message;
+    errBox.textContent = msg;
+    errBox.hidden = false;
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
 // ---- ledger ----
 function logBet(m: Match, pick: Pick, odds: number, stake: number): void {
   const logerr = maybe("logerr");
@@ -881,6 +993,11 @@ el<HTMLSelectElement>("protocol").addEventListener("change", () => populateModel
 el<HTMLSelectElement>("modelSel").addEventListener("change", syncCustomVisibility);
 el("savekey").addEventListener("click", saveConfig);
 el("parsebtn").addEventListener("click", parseMatches);
+el("predictAllBtn").addEventListener("click", predictAll);
+el("chatSend").addEventListener("click", sendChat);
+el<HTMLTextAreaElement>("chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
 el("polyPrev").addEventListener("click", () => gotoPolyIdx(polyIdx - 1));
 el("polyNext").addEventListener("click", () => gotoPolyIdx(polyIdx + 1));
 el<HTMLSelectElement>("polyDate").addEventListener("change", function () {
@@ -923,6 +1040,7 @@ loadConfig();
 loadPolyDates();
 loadStatus();
 renderMatches(); renderPredEmpty();
+renderChat();
 renderCalc();
 renderCalcMatch();
 refreshLedger();

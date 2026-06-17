@@ -80,6 +80,12 @@ export interface SourceStatus {
   updated_at?: string | number; // unix seconds, sometimes "@<secs>"
 }
 
+// ---- chat agent ----
+export interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
+}
+
 // ---- parlay calculator + tickets ----
 export interface CalcLeg {
   label: string;
