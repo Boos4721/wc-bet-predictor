@@ -7,12 +7,12 @@ mod ledger;
 mod predictor;
 mod config;
 mod api;
+mod static_assets;
 
 use api::AppState;
 use ledger::Store;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() {
@@ -58,7 +58,7 @@ async fn main() {
     };
 
     let app = api::router(state)
-        .nest_service("/", ServeDir::new("../frontend/dist"))
+        .fallback(static_assets::static_handler)
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8787").await.unwrap();
