@@ -17,6 +17,9 @@ echo "==> [1/4] 构建前端 (web/dist)"
 ( cd web && bun install && bun run build )
 
 echo "==> [2/4] 编译 release 二进制 (嵌入前端)"
+# rust-embed 在编译期嵌入 web/dist;仅改动 dist 文件不会触发 cargo 重编,
+# 故先 touch 嵌入源,强制重新编译以纳入最新前端。
+touch src/static_assets.rs
 cargo build --release
 
 echo "==> [3/4] 组装 ${PKG_DIR}/${PKG_NAME}/"
